@@ -1,4 +1,4 @@
-package com.example.spydarsense
+package com.example.spydarsense.data
 
 class AP(
     var essid: String?, // Changed to var

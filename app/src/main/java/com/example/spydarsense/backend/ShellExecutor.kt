@@ -50,7 +50,7 @@ class ShellExecutor {
     }
 }
 */
-package com.example.spydarsense
+package com.example.spydarsense.backend
 
 import java.io.BufferedReader
 import java.io.InputStreamReader

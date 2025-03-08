@@ -39,8 +39,8 @@ import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.example.spydarsense.data.AP
 
 class MainActivity : ComponentActivity() {
 

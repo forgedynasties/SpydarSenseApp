@@ -14,11 +14,15 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import kotlinx.coroutines.launch
+
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
     val csiCollector = remember { CSIBitrateCollector() }
     var isCollecting by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+
+    val latestCsiDir by csiCollector.tcpdumpManager.csiDirs.collectAsState()
+    val latestBrDir by csiCollector.tcpdumpManager.brDirs.collectAsState()
 
     Box(
         modifier = Modifier
@@ -44,14 +48,18 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Display error if any
+            // Display latest CSI and bitrate directories
             Text(
-                text = "Error: None",
+                text = "Latest CSI Directory: ${latestCsiDir.lastOrNull() ?: "None"}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.Red
+                color = Color.White
             )
             Spacer(modifier = Modifier.height(8.dp))
-
+            Text(
+                text = "Latest Bitrate Directory: ${latestBrDir.lastOrNull() ?: "None"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White
+            )
             Spacer(modifier = Modifier.height(16.dp))
 
             // Stop/Start button

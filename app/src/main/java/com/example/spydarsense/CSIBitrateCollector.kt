@@ -4,7 +4,10 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.text.SimpleDateFormat
+import java.util.*
 import kotlin.coroutines.resume
 
 class CSIBitrateCollector {
@@ -12,7 +15,28 @@ class CSIBitrateCollector {
     private val shellExecutor = ShellExecutor()
     private val _csiOutput = MutableStateFlow<String>("")
     val csiOutput: StateFlow<String> = _csiOutput
-    private val tcpdumpManager = TcpdumpManager()
+    private val outputDir = "/sdcard/Download/Lab"
+    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+    val tcpdumpManager = TcpdumpManager(outputDir, dateFormat, shellExecutor)
+
+    init {
+        CoroutineScope(Dispatchers.IO).launch {
+            tcpdumpManager.csiDirs.collect { newCsiDirs ->
+                // Handle new CSI paths
+                newCsiDirs.forEach { path ->
+                    Log.d("CSIBitrateCollector", "New CSI path: $path")
+                    // Process the new CSI path
+                }
+            }
+            tcpdumpManager.brDirs.collect { newBrDirs ->
+                // Handle new bitrate paths
+                newBrDirs.forEach { path ->
+                    Log.d("CSIBitrateCollector", "New bitrate path: $path")
+                    // Process the new bitrate path
+                }
+            }
+        }
+    }
 
     fun collectCSIBitrate(mac: String, ch: Int) {
         CoroutineScope(Dispatchers.IO).launch {
@@ -29,7 +53,6 @@ class CSIBitrateCollector {
                 }
             }
         }
-
     }
 
     suspend fun makeCSIParams(mac: String, ch: Int): String {

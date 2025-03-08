@@ -3,15 +3,23 @@ package com.example.spydarsense
 import android.util.Log
 import com.example.spydarsense.data.PcapCSI
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-class TcpdumpManager {
+class TcpdumpManager(
+    private val outputDir: String,
+    private val dateFormat: SimpleDateFormat,
+    private val shellExecutor: ShellExecutor
+) {
 
-    private val outputDir = "/sdcard/Download/Lab"
-    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-    private val shellExecutor = ShellExecutor()
+    private val _csiDirs = MutableStateFlow<List<String>>(emptyList())
+    val csiDirs: StateFlow<List<String>> = _csiDirs
+
+    private val _brDirs = MutableStateFlow<List<String>>(emptyList())
+    val brDirs: StateFlow<List<String>> = _brDirs
 
     init {
         File(outputDir).mkdirs()
@@ -56,7 +64,6 @@ class TcpdumpManager {
                 val brDir = "$outputDir/cam_$now.pcap"
                 runTcpdump("wlan0", "dst port 5500", csiDir)
 
-
                 // Start bitrate capture
                 runTcpdump("wlan0", "ether src AC:6C:90:22:8F:37", brDir, "libnexmon.so")
 
@@ -69,8 +76,15 @@ class TcpdumpManager {
 
                 Log.d("TcpdumpManager", "Iteration $i: Finished")
                 PcapCSI.processPcap(csiDir)
+
+                // Update the lists with new paths
+                _csiDirs.value = _csiDirs.value + csiDir
+                _brDirs.value = _brDirs.value + brDir
             }
             Log.d("TcpdumpManager", "All iterations completed")
+            Log.d("TcpdumpManager", "CSI paths: ${_csiDirs.value}")
+            Log.d("TcpdumpManager", "Bitrate paths: ${_brDirs.value}")
+
         }
     }
 }

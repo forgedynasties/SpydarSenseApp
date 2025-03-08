@@ -1,0 +1,76 @@
+package com.example.spydarsense
+
+import android.util.Log
+import com.example.spydarsense.data.PcapCSI
+import kotlinx.coroutines.*
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+class TcpdumpManager {
+
+    private val outputDir = "/sdcard/Download/Lab"
+    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+    private val shellExecutor = ShellExecutor()
+
+    init {
+        File(outputDir).mkdirs()
+    }
+
+    private fun runTcpdump(interf: String, filter: String, outputFile: String, preloadLib: String? = null) {
+        val command = if (preloadLib != null) {
+            "LD_PRELOAD=$preloadLib tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
+        } else {
+            "tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
+        }
+        Log.d("TcpdumpManager", "Starting tcpdump: $outputFile")
+        shellExecutor.execute(command) { output, exitCode ->
+            if (exitCode == 0) {
+                Log.d("TcpdumpManager", "tcpdump started successfully: $output")
+            } else {
+                Log.e("TcpdumpManager", "tcpdump failed to start: $output")
+            }
+        }
+    }
+
+    private fun stopTcpdump() {
+        val command = "pkill tcpdump"
+        shellExecutor.execute(command) { output, exitCode ->
+            if (exitCode == 0) {
+                Log.d("TcpdumpManager", "Stopped all tcpdump processes")
+            } else {
+                Log.e("TcpdumpManager", "Failed to stop tcpdump processes: $output")
+            }
+        }
+    }
+
+    fun startCaptures() {
+        CoroutineScope(Dispatchers.IO).launch {
+            for (i in 1..10) {
+                Log.d("TcpdumpManager", "Iteration $i: Starting")
+
+                val now = dateFormat.format(Date())
+
+                // Start CSI capture
+                val csiDir = "$outputDir/csi_$now.pcap"
+                val brDir = "$outputDir/cam_$now.pcap"
+                runTcpdump("wlan0", "dst port 5500", csiDir)
+
+
+                // Start bitrate capture
+                runTcpdump("wlan0", "ether src AC:6C:90:22:8F:37", brDir, "libnexmon.so")
+
+                // Let captures run for 60 seconds
+                delay(3000)
+
+                // Stop all tcpdump processes
+                stopTcpdump()
+                delay(1000)
+
+                Log.d("TcpdumpManager", "Iteration $i: Finished")
+                PcapCSI.processPcap(csiDir)
+            }
+            Log.d("TcpdumpManager", "All iterations completed")
+        }
+    }
+}

@@ -16,14 +16,16 @@ import com.example.spydarsense.backend.CSIBitrateCollector
 import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import kotlinx.coroutines.launch
 
+
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
+
     val csiCollector = remember { CSIBitrateCollector() }
     var isCollecting by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    val latestCsiDir by csiCollector.tcpdumpManager.csiDirs.collectAsState()
-    val latestBrDir by csiCollector.tcpdumpManager.brDirs.collectAsState()
+    val latestCsiDir by csiCollector.tcpdumpManager.csiDirs.collectAsState(emptyList())
+    val latestBrDir by csiCollector.tcpdumpManager.brDirs.collectAsState(emptyList())
 
     Box(
         modifier = Modifier
@@ -67,7 +69,7 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
             Button(
                 onClick = {
                     if (isCollecting) {
-                        //csiCollector.stopTcpdump()
+                        csiCollector.tcpdumpManager.stopCaptures()
                     } else {
                         coroutineScope.launch {
                             csiCollector.collectCSIBitrate(mac, ch)

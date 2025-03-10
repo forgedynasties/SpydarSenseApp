@@ -18,28 +18,11 @@ class CSIBitrateCollector {
     private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
     val tcpdumpManager = TcpdumpManager(outputDir, dateFormat, shellExecutor)
 
-    init {
-        CoroutineScope(Dispatchers.IO).launch {
-            tcpdumpManager.csiDirs.collect { newCsiDirs ->
-                // Handle new CSI paths
-                newCsiDirs.forEach { path ->
-                    Log.d("CSIBitrateCollector", "New CSI path: $path")
-                    // Process the new CSI path
-                }
-            }
-            tcpdumpManager.brDirs.collect { newBrDirs ->
-                // Handle new bitrate paths
-                newBrDirs.forEach { path ->
-                    Log.d("CSIBitrateCollector", "New bitrate path: $path")
-                    // Process the new bitrate path
-                }
-            }
-        }
-    }
-
+  
     fun collectCSIBitrate(mac: String, ch: Int) {
         CoroutineScope(Dispatchers.IO).launch {
             val csiParams = "BhABEQGIAQCsbJAijzcAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
             Log.d("CSIBitrateCollector", "Collecting CSI with params: $csiParams")
             val nexutilCommand = "nexutil -Iwlan0 -s500 -b -l34 -v$csiParams"
             Log.d("CSIBitrateCollector", "nexutil command: $nexutilCommand")

@@ -15,17 +15,19 @@ import androidx.compose.ui.unit.dp
 import com.example.spydarsense.backend.CSIBitrateCollector
 import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import kotlinx.coroutines.launch
-
+import com.example.spydarsense.backend.SpyCameraDetector
 
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
-
-    val csiCollector = remember { CSIBitrateCollector() }
+    val detector = remember { SpyCameraDetector.getInstance() }
     var isCollecting by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    val latestCsiDir by csiCollector.tcpdumpManager.csiDirs.collectAsState(emptyList())
-    val latestBrDir by csiCollector.tcpdumpManager.brDirs.collectAsState(emptyList())
+    // Get all directories and the latest for display
+    val csiDirs by detector.csiDirs.collectAsState(emptyList())
+    val brDirs by detector.brDirs.collectAsState(emptyList())
+    val latestCsiDir = csiDirs.lastOrNull() ?: "None"
+    val latestBrDir = brDirs.lastOrNull() ?: "None"
 
     Box(
         modifier = Modifier
@@ -53,13 +55,13 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
 
             // Display latest CSI and bitrate directories
             Text(
-                text = "Latest CSI Directory: ${latestCsiDir.lastOrNull() ?: "None"}",
+                text = "Latest CSI Directory: $latestCsiDir",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Latest Bitrate Directory: ${latestBrDir.lastOrNull() ?: "None"}",
+                text = "Latest Bitrate Directory: $latestBrDir",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White
             )
@@ -69,10 +71,10 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
             Button(
                 onClick = {
                     if (isCollecting) {
-                        csiCollector.tcpdumpManager.stopCaptures()
+                        detector.stopDetection()
                     } else {
                         coroutineScope.launch {
-                            csiCollector.collectCSIBitrate(mac, ch)
+                            detector.startDetection(mac, ch)
                         }
                     }
                     isCollecting = !isCollecting
@@ -80,6 +82,7 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
             ) {
                 Text(if (isCollecting) "Stop Collection" else "Start Collection")
             }
+
         }
     }
 }

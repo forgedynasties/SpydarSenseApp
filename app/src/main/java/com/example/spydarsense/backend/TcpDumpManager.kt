@@ -11,7 +11,8 @@ import java.util.*
 class TcpdumpManager(
     private val outputDir: String,
     private val dateFormat: SimpleDateFormat,
-    private val shellExecutor: ShellExecutor
+    private val shellExecutor: ShellExecutor,
+    private val etherSrc: String
 ) {
 
     private val _csiDirs = MutableStateFlow<List<String>>(emptyList())
@@ -69,7 +70,7 @@ class TcpdumpManager(
                 runTcpdump("wlan0", "dst port 5500", csiDir)
 
                 // Start bitrate capture
-                runTcpdump("wlan0", "ether src AC:6C:90:22:8F:37", brDir, "libnexmon.so")
+                runTcpdump("wlan0", "ether src $etherSrc", brDir, "libnexmon.so")
 
                 // Let captures run for 60 seconds
                 delay(3000)

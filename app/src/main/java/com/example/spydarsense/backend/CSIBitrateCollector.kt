@@ -9,14 +9,13 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.coroutines.resume
 
-class CSIBitrateCollector {
+class CSIBitrateCollector(val tcpdumpManager: TcpdumpManager) {
 
     private val shellExecutor = ShellExecutor()
     private val _csiOutput = MutableStateFlow<String>("")
     val csiOutput: StateFlow<String> = _csiOutput
     private val outputDir = "/sdcard/Download/Lab"
     private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-    val tcpdumpManager = TcpdumpManager(outputDir, dateFormat, shellExecutor)
 
   
     fun collectCSIBitrate(mac: String, ch: Int) {

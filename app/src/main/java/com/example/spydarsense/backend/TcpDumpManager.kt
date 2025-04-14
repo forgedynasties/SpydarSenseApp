@@ -73,20 +73,10 @@ class TcpdumpManager(
                 runTcpdump("wlan0", "ether src $etherSrc", brDir, "libnexmon.so")
 
                 // Let captures run for 60 seconds
-                delay(500)
+                delay(1000)
 
                 stopTcpdump()
-                val startTime = System.currentTimeMillis()
-                var allProcessesStopped = false
-
-// Check if processes have stopped with a maximum wait time
-                while (!allProcessesStopped && System.currentTimeMillis() - startTime < 200) {
-                    // Check if tcpdump is still running
-                    shellExecutor.execute("pgrep tcpdump") { output, exitCode ->
-                        allProcessesStopped = exitCode != 0 || output.trim().isEmpty()
-                    }
-                    delay(50)
-                }
+                delay(1000)
 
 
                 Log.d("TcpdumpManager", "Iteration $i: Finished")

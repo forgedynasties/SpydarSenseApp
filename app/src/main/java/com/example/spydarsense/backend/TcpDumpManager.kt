@@ -73,21 +73,26 @@ class TcpdumpManager(
                 runTcpdump("wlan0", "ether src $etherSrc", brDir, "libnexmon.so")
 
                 // Let captures run for 60 seconds
-                delay(3000)
+                delay(500)
 
-                // Stop all tcpdump processes
                 stopTcpdump()
-                delay(1000)
+                val startTime = System.currentTimeMillis()
+                var allProcessesStopped = false
+
+// Check if processes have stopped with a maximum wait time
+                while (!allProcessesStopped && System.currentTimeMillis() - startTime < 200) {
+                    // Check if tcpdump is still running
+                    shellExecutor.execute("pgrep tcpdump") { output, exitCode ->
+                        allProcessesStopped = exitCode != 0 || output.trim().isEmpty()
+                    }
+                    delay(50)
+                }
 
 
                 Log.d("TcpdumpManager", "Iteration $i: Finished")
                 PcapProcessor.processPcapCSI(csiDir)
-                //PcapProcessor.processPcapBitrate(brDir)
 
 
-
-
-                // Update the lists with new paths
                 _csiDirs.value = _csiDirs.value + csiDir
                 _brDirs.value = _brDirs.value + brDir
 

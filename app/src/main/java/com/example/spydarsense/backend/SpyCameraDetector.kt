@@ -49,6 +49,18 @@ class SpyCameraDetector private constructor() {
     private val _loggingEnabled = MutableStateFlow(false)
     val loggingEnabled: StateFlow<Boolean> = _loggingEnabled
 
+    // Indices of CSI amplitudes to keep
+    private val csiIndicesToKeep = intArrayOf(4, 8, 13, 18, 22, 27, 34, 38, 43, 48, 52, 58)
+
+    private val pcaExtractor = PCAFeatureExtractor()
+
+    // New state flows for PCA features
+    private val _csiPcaFeatures = MutableStateFlow<PCAFeatureExtractor.PCAFeatures?>(null)
+    val csiPcaFeatures: StateFlow<PCAFeatureExtractor.PCAFeatures?> = _csiPcaFeatures
+
+    private val _bitratePcaFeatures = MutableStateFlow<PCAFeatureExtractor.PCAFeatures?>(null)
+    val bitratePcaFeatures: StateFlow<PCAFeatureExtractor.PCAFeatures?> = _bitratePcaFeatures
+
     init {
         // Monitor for new directories and process them
         CoroutineScope(Dispatchers.IO).launch {
@@ -141,31 +153,56 @@ class SpyCameraDetector private constructor() {
         if (csiSamplesBuffer.isEmpty()) {
             log("CSI buffer is empty, cannot update stats")
             _csiStats.value = null
+            _csiPcaFeatures.value = null
             return
         }
         
         log("Updating CSI stats with ${csiSamplesBuffer.size} samples")
         val amplitudesList = mutableListOf<Float>()
+        val sampleAmplitudesList = mutableListOf<List<Float>>()
         
         try {
             csiSamplesBuffer.forEach { sample ->
                 val complexSamples = PcapProcessor.unpack(sample.csi, "default", fftshift = true)
-                val amplitudes = complexSamples.map { 
+                val fullAmplitudes = complexSamples.map { 
                     kotlin.math.sqrt(it.re * it.re + it.im * it.im) 
                 }
-                amplitudesList.addAll(amplitudes)
+                
+                // Only keep the specified indices - fixed to avoid mapNotNull
+                val filteredAmplitudes = mutableListOf<Float>()
+                for (index in csiIndicesToKeep) {
+                    if (index >= 0 && index < fullAmplitudes.size) {
+                        filteredAmplitudes.add(fullAmplitudes[index])
+                    }
+                }
+                
+                // Add to aggregate list
+                amplitudesList.addAll(filteredAmplitudes)
+                
+                // Add as an individual sample
+                sampleAmplitudesList.add(filteredAmplitudes)
+                
+                log("Filtered CSI amplitudes to ${filteredAmplitudes.size} values from ${fullAmplitudes.size}")
             }
             
-            val avgAmplitude = amplitudesList.average().toFloat()
-            val minAmplitude = amplitudesList.minOrNull() ?: 0f
-            val maxAmplitude = amplitudesList.maxOrNull() ?: 0f
+            val avgAmplitude = if (amplitudesList.isNotEmpty()) amplitudesList.sum() / amplitudesList.size.toFloat() else 0f
+            val minAmplitude = amplitudesList.minOfOrNull { it } ?: 0f
+            val maxAmplitude = amplitudesList.maxOfOrNull { it } ?: 0f
             
             _csiStats.value = CSIStats(
                 sampleCount = csiSamplesBuffer.size,
                 avgAmplitude = avgAmplitude,
                 minAmplitude = minAmplitude,
-                maxAmplitude = maxAmplitude
+                maxAmplitude = maxAmplitude,
+                sampleAmplitudes = sampleAmplitudesList
             )
+            
+            // Extract PCA features
+            CoroutineScope(Dispatchers.IO).launch {
+                val pcaFeatures = pcaExtractor.extractCSIFeatures(sampleAmplitudesList)
+                _csiPcaFeatures.value = pcaFeatures
+                log("Updated CSI PCA features: ${pcaFeatures.values.size} values")
+            }
             
             log("Updated CSI stats: ${_csiStats.value}")
         } catch (e: Exception) {
@@ -180,6 +217,7 @@ class SpyCameraDetector private constructor() {
     private fun updateBitrateStats() {
         if (bitrateSamplesBuffer.isEmpty()) {
             _bitrateStats.value = null
+            _bitratePcaFeatures.value = null
             return
         }
         
@@ -192,8 +230,16 @@ class SpyCameraDetector private constructor() {
             sampleCount = bitrateSamplesBuffer.size,
             avgBitrate = avgBitrate,
             minBitrate = minBitrate,
-            maxBitrate = maxBitrate
+            maxBitrate = maxBitrate,
+            bitrateValues = bitrateValues
         )
+        
+        // Extract PCA features
+        CoroutineScope(Dispatchers.IO).launch {
+            val pcaFeatures = pcaExtractor.extractBitrateFeatures(bitrateValues)
+            _bitratePcaFeatures.value = pcaFeatures
+            log("Updated bitrate PCA features: ${pcaFeatures.values.size} values")
+        }
         
         log("Updated bitrate stats: ${_bitrateStats.value}")
     }
@@ -246,14 +292,16 @@ class SpyCameraDetector private constructor() {
         val sampleCount: Int,
         val avgAmplitude: Float,
         val minAmplitude: Float, 
-        val maxAmplitude: Float
+        val maxAmplitude: Float,
+        val sampleAmplitudes: List<List<Float>> = emptyList() // List of sample amplitudes
     )
 
     data class BitrateStats(
         val sampleCount: Int,
         val avgBitrate: Float,
         val minBitrate: Int,
-        val maxBitrate: Int
+        val maxBitrate: Int,
+        val bitrateValues: List<Int> = emptyList() // List of bitrate values
     )
 
     companion object {

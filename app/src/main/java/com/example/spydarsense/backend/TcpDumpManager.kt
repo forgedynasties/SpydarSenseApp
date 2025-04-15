@@ -80,8 +80,6 @@ class TcpdumpManager(
 
 
                 Log.d("TcpdumpManager", "Iteration $i: Finished")
-                PcapProcessor.processPcapCSI(csiDir)
-
 
                 _csiDirs.value = _csiDirs.value + csiDir
                 _brDirs.value = _brDirs.value + brDir

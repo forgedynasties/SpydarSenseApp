@@ -176,35 +176,34 @@ object PcapProcessor {
         else -> 20
     }
 
-    fun processPcapCSI(pcapFilepath: String): List<CSISample> {
-        val samples = mutableListOf<CSISample>()
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                samples.addAll(readPcap(pcapFilepath))
-                Log.d("CSISampleReader", "Parsed CSI samples: ${samples.size}")
-                samples.forEachIndexed { _, sample ->
-                    processCSISample(csiSample = sample)
-                }
-            } catch (e: Exception) {
-                Log.e("CSISampleReader", "Error parsing pcap file: ${e.message}")
+    suspend fun processPcapCSI(pcapFilepath: String): List<CSISample> {
+        try {
+            val samples = readPcap(pcapFilepath)
+            Log.d("CSISampleReader", "Parsed CSI samples: ${samples.size}")
+            
+            // Process samples but don't launch a new coroutine - we want to wait for this to complete
+            samples.forEach { sample ->
+                val complexSamples = unpack(sample.csi, "default", fftshift = true)
+                val amplitudes = complexSamples.map { sqrt(it.re * it.re + it.im * it.im) }
+                Log.d("CSISampleReader", "CSI Sample amplitudes: $amplitudes")
             }
+            
+            return samples
+        } catch (e: Exception) {
+            Log.e("CSISampleReader", "Error parsing pcap file: ${e.message}")
+            return emptyList()
         }
-        return samples
     }
 
+    // If you still need this function for other purposes, rename it
     fun processCSISample(csiSample: CSISample) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val complexSamples = unpack(csiSample.csi, "default", fftshift = true)
-                val amplitudes = complexSamples.map { sqrt(it.re * it.re + it.im * it.im) }
-                val timestamp = csiSample.tsSec * 1_000_000L + csiSample.tsUsec
-                //Log.d("CSISampleReader", "CSI Sample timestamp: $timestamp")
-                Log.d("CSISampleReader", "CSI Sample amplitudes: $amplitudes")
-                //val macAddress = csiSample.mac.joinToString(":") { byte -> "%02X".format(byte) }
-                //Log.d("CSISampleReader", macAddress)
-            } catch (e: Exception) {
-                Log.e("CSISampleReader", "Error parsing pcap file: ${e.message}")
-            }
+        try {
+            val complexSamples = unpack(csiSample.csi, "default", fftshift = true)
+            val amplitudes = complexSamples.map { sqrt(it.re * it.re + it.im * it.im) }
+            val timestamp = csiSample.tsSec * 1_000_000L + csiSample.tsUsec
+            Log.d("CSISampleReader", "CSI Sample amplitudes: $amplitudes")
+        } catch (e: Exception) {
+            Log.e("CSISampleReader", "Error processing CSI sample: ${e.message}")
         }
     }
 

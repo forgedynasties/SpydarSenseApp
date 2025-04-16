@@ -94,6 +94,66 @@ class SpyCameraDetector private constructor() {
                 }
             }
         }
+        
+        // Add direct monitoring of processing trigger from TcpdumpManager
+        CoroutineScope(Dispatchers.IO).launch {
+            tcpdumpManager.processingTrigger.collect { timestamp ->
+                if (timestamp > 0) {
+                    log("Processing trigger received at $timestamp")
+                    processContinuousData()
+                }
+            }
+        }
+    }
+    
+    // Add method to process continuous data streams
+    private fun processContinuousData() {
+        val csiFile = tcpdumpManager.getCurrentCsiFile()
+        val brFile = tcpdumpManager.getCurrentBrFile()
+        
+        log("Starting continuous data processing cycle")
+        
+        if (csiFile != null) {
+            log("Processing continuous CSI data from $csiFile")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val samples = PcapProcessor.processPcapCSI(csiFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} new CSI samples")
+                        synchronized(csiSamplesBuffer) {
+                            csiSamplesBuffer.addAll(samples)
+                            updateCsiStats()
+                        }
+                    } else {
+                        log("No new CSI samples found in file: $csiFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing CSI file $csiFile: ${e.message}")
+                    e.printStackTrace()
+                }
+            }
+        }
+        
+        if (brFile != null) {
+            log("Processing continuous bitrate data from $brFile")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val samples = PcapProcessor.processPcapBitrate(brFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} new bitrate samples")
+                        synchronized(bitrateSamplesBuffer) {
+                            bitrateSamplesBuffer.addAll(samples)
+                            updateBitrateStats()
+                        }
+                    } else {
+                        log("No new bitrate samples found in file: $brFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing bitrate file $brFile: ${e.message}")
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     fun enableLogging(enabled: Boolean) {
@@ -162,9 +222,7 @@ class SpyCameraDetector private constructor() {
     private fun updateCsiStats() {
         if (csiSamplesBuffer.isEmpty()) {
             log("CSI buffer is empty, cannot update stats")
-            _csiStats.value = null
-            _csiPcaFeatures.value = null
-            return
+            return // Keep the previous stats if buffer is empty
         }
         
         log("Updating CSI stats with ${csiSamplesBuffer.size} samples")
@@ -248,10 +306,8 @@ class SpyCameraDetector private constructor() {
      */
     private fun updateBitrateStats() {
         if (bitrateSamplesBuffer.isEmpty()) {
-            _bitrateStats.value = null
-            _bitratePcaFeatures.value = null
-            _bitrateTimeline.value = emptyMap()
-            return
+            log("Bitrate buffer is empty, cannot update stats")
+            return // Keep the previous stats if buffer is empty
         }
         
         val bitrateValues = bitrateSamplesBuffer.map { it.bitrate }
@@ -325,6 +381,9 @@ class SpyCameraDetector private constructor() {
             _bitrateTimeline.value = emptyMap()
             updateBitrateStats()
         }
+        
+        // Clear tracked file positions
+        PcapProcessor.clearTrackedPositions()
     }
 
     private fun log(message: String) {

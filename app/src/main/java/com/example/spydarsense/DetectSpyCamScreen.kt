@@ -35,6 +35,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.drawText
 import kotlin.math.min
 import androidx.compose.ui.text.rememberTextMeasurer
+import android.util.Log
+import kotlinx.coroutines.delay
 
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
@@ -62,6 +64,26 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
     // Collect timeline data
     val csiTimeline by detector.csiTimeline.collectAsState()
     val bitrateTimeline by detector.bitrateTimeline.collectAsState()
+
+    // Force UI refresh periodically
+    val refreshCounter = remember { mutableStateOf(0) }
+    
+    // Periodically increment counter to force recomposition
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000) // Update every second
+            refreshCounter.value += 1
+            Log.d("DetectSpyCamScreen", "Forcing UI refresh")
+        }
+    }
+    
+    // Add debug logging for state updates with forced refreshes
+    LaunchedEffect(csiStats, bitrateStats, csiTimeline, bitrateTimeline, refreshCounter.value) {
+        Log.d("DetectSpyCamScreen", "Stats updated - CSI samples: ${csiStats?.sampleCount ?: 0}, " +
+                "Bitrate samples: ${bitrateStats?.sampleCount ?: 0}, " +
+                "Timeline points: CSI=${csiTimeline.size}, Bitrate=${bitrateTimeline.size}, " +
+                "Refresh cycle: ${refreshCounter.value}")
+    }
 
     Box(
         modifier = Modifier

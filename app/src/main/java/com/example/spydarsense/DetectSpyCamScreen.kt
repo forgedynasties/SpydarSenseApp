@@ -24,6 +24,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.drawText
+import kotlin.math.min
+import androidx.compose.ui.text.rememberTextMeasurer
 
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
@@ -47,6 +58,10 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
     // Collect PCA features
     val csiPcaFeatures by detector.csiPcaFeatures.collectAsState()
     val bitratePcaFeatures by detector.bitratePcaFeatures.collectAsState()
+    
+    // Collect timeline data
+    val csiTimeline by detector.csiTimeline.collectAsState()
+    val bitrateTimeline by detector.bitrateTimeline.collectAsState()
 
     Box(
         modifier = Modifier
@@ -272,6 +287,56 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Display Timeline
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = "Unified Timeline",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        if (csiTimeline.isEmpty() && bitrateTimeline.isEmpty()) {
+                            Text(text = "No timeline data available yet", color = Color.Gray)
+                        } else {
+                            // Get the combined time points from both timelines
+                            val allTimePoints = (csiTimeline.keys + bitrateTimeline.keys).toSortedSet()
+                            
+                            if (allTimePoints.isNotEmpty()) {
+                                Text(
+                                    text = "Timeline points: ${allTimePoints.size} (${allTimePoints.first().format(1)}s - ${allTimePoints.last().format(1)}s)",
+                                    fontSize = 14.sp
+                                )
+                                
+                                Spacer(modifier = Modifier.height(12.dp))
+                                
+                                // Draw the timeline visualization
+                                TimelineVisualization(
+                                    csiTimeline = csiTimeline,
+                                    bitrateTimeline = bitrateTimeline,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp)
+                                        .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
+                                        .padding(8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 // NEW: Display PCA Features
                 Card(
                     modifier = Modifier
@@ -385,6 +450,164 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
             
             Spacer(modifier = Modifier.height(32.dp)) // Add extra space at the bottom for safe area
         }
+    }
+}
+
+// Extension function to format doubles consistently
+fun Double.format(digits: Int): String = "%.${digits}f".format(this)
+
+@Composable
+fun TimelineVisualization(
+    csiTimeline: Map<Double, List<Float>>,
+    bitrateTimeline: Map<Double, Int>,
+    modifier: Modifier = Modifier
+) {
+    val df = remember { DecimalFormat("#.#") }
+    val textMeasurer = rememberTextMeasurer()
+    
+    // Combine time points from both timelines
+    val allTimePoints = remember(csiTimeline, bitrateTimeline) {
+        (csiTimeline.keys + bitrateTimeline.keys).toSortedSet().toList()
+    }
+    
+    if (allTimePoints.isEmpty()) {
+        Box(modifier = modifier) {
+            Text(
+                text = "No data points to display",
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.Gray
+            )
+        }
+        return
+    }
+    
+    // Find max values for scaling
+    val maxCsiAmplitude = remember(csiTimeline) {
+        csiTimeline.values.flatMap { it }.maxOfOrNull { it } ?: 0f
+    }
+    
+    val maxBitrate = remember(bitrateTimeline) {
+        bitrateTimeline.values.maxOfOrNull { it } ?: 0
+    }
+
+    Canvas(modifier = modifier) {
+        val width = size.width
+        val height = size.height
+        val graphHeight = height * 0.8f
+        val startY = height * 0.1f
+        
+        // Time range
+        val startTime = allTimePoints.first()
+        val endTime = allTimePoints.last()
+        val timeRange = endTime - startTime
+        
+        // Draw time axis
+        drawLine(
+            color = Color.Gray,
+            start = Offset(0f, height - 20),
+            end = Offset(width, height - 20),
+            strokeWidth = 1f
+        )
+        
+        // Draw time markers
+        val numMarkers = min(10, allTimePoints.size)
+        for (i in 0..numMarkers) {
+            val x = (i * width) / numMarkers
+            val time = startTime + (i * timeRange) / numMarkers
+            
+            // Draw tick mark
+            drawLine(
+                color = Color.Gray,
+                start = Offset(x, height - 20),
+                end = Offset(x, height - 15),
+                strokeWidth = 1f
+            )
+            
+            // Draw time label using the correct drawText overload
+            drawText(
+                textMeasurer = textMeasurer,
+                text = df.format(time),
+                topLeft = Offset(x - 10, height - 15),
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 10.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+            )
+        }
+        
+        // Draw CSI data points (in blue)
+        csiTimeline.forEach { (time, amplitudes) ->
+            if (amplitudes.isNotEmpty()) {
+                // Use average amplitude for visualization
+                val avgAmplitude = amplitudes.average().toFloat()
+                val normalizedAmplitude = if (maxCsiAmplitude > 0) avgAmplitude / maxCsiAmplitude else 0f
+                
+                val x = ((time - startTime) / timeRange * width).toFloat()
+                val y = startY + (1 - normalizedAmplitude) * graphHeight
+                
+                // Draw a blue point
+                drawCircle(
+                    color = Color.Blue,
+                    radius = 3f,
+                    center = Offset(x, y)
+                )
+            }
+        }
+        
+        // Draw Bitrate data points (in red)
+        bitrateTimeline.forEach { (time, bitrate) -> 
+            val normalizedBitrate = if (maxBitrate > 0) bitrate.toFloat() / maxBitrate else 0f
+            
+            val x = ((time - startTime) / timeRange * width).toFloat()
+            val y = startY + (1 - normalizedBitrate) * graphHeight
+            
+            // Draw a red point
+            drawCircle(
+                color = Color.Red,
+                radius = 3f,
+                center = Offset(x, y)
+            )
+        }
+        
+        // Draw legend
+        val legendY = 15f
+        
+        // CSI legend
+        drawCircle(
+            color = Color.Blue,
+            radius = 3f,
+            center = Offset(width * 0.25f, legendY)
+        )
+        
+        // Draw legend text using the correct drawText overload
+        drawText(
+            textMeasurer = textMeasurer,
+            text = "CSI",
+            topLeft = Offset(width * 0.25f + 10, legendY - 5),
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = 12.sp,
+                color = Color.Blue
+            )
+        )
+        
+        // Bitrate legend
+        drawCircle(
+            color = Color.Red,
+            radius = 3f,
+            center = Offset(width * 0.75f, legendY)
+        )
+        
+        // Draw legend text using the correct drawText overload
+        drawText(
+            textMeasurer = textMeasurer,
+            text = "Bitrate",
+            topLeft = Offset(width * 0.75f + 10, legendY - 5),
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = 12.sp,
+                color = Color.Red
+            )
+        )
     }
 }
 

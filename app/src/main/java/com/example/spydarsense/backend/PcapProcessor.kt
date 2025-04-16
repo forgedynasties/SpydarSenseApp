@@ -13,7 +13,7 @@ import kotlin.math.roundToInt
 
 data class Complex(val re: Float, val im: Float)
 
-data class BitrateSample(val timestamp: Long, val bitrate: Int)
+data class BitrateSample(val timestamp: Double, val bitrate: Int)
 
 object PcapProcessor {
 
@@ -229,19 +229,15 @@ object PcapProcessor {
                 firstTimestamp = timestamp
             }
             val relativeTimestamp = (timestamp - firstTimestamp!!) / 1_000_000.0
-            val roundedTimestamp = (relativeTimestamp * 10).roundToInt() / 10.0
-            val formattedTimestamp = if (roundedTimestamp == 1.0) {
-                "$roundedTimestamp second"
-            } else {
-                "$roundedTimestamp sec"
-            }
-
+            
+            // No longer rounding here - that will be done in the timeline normalization
+            
             val headerLength = 16
             val bitrate = origLen - headerLength
 
-            samples.add(BitrateSample(roundedTimestamp.toLong(), bitrate))
+            samples.add(BitrateSample(relativeTimestamp, bitrate))
             Log.d("PcapBitrate", "Bitrate: $bitrate")
-            Log.d("PcapBitrate", "Timestamp: $formattedTimestamp")
+            Log.d("PcapBitrate", "Timestamp: $relativeTimestamp sec")
 
             ptr += 16 + inclLen
         }

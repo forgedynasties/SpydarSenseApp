@@ -61,6 +61,16 @@ class SpyCameraDetector private constructor() {
     private val _bitratePcaFeatures = MutableStateFlow<PCAFeatureExtractor.PCAFeatures?>(null)
     val bitratePcaFeatures: StateFlow<PCAFeatureExtractor.PCAFeatures?> = _bitratePcaFeatures
 
+    // Timeline data structures
+    private val _csiTimeline = MutableStateFlow<Map<Double, List<Float>>>(emptyMap())
+    val csiTimeline: StateFlow<Map<Double, List<Float>>> = _csiTimeline
+    
+    private val _bitrateTimeline = MutableStateFlow<Map<Double, Int>>(emptyMap())
+    val bitrateTimeline: StateFlow<Map<Double, Int>> = _bitrateTimeline
+    
+    // Timestamp of first sample for relative timing
+    private var firstTimestamp: Long? = null
+
     init {
         // Monitor for new directories and process them
         CoroutineScope(Dispatchers.IO).launch {
@@ -160,9 +170,21 @@ class SpyCameraDetector private constructor() {
         log("Updating CSI stats with ${csiSamplesBuffer.size} samples")
         val amplitudesList = mutableListOf<Float>()
         val sampleAmplitudesList = mutableListOf<List<Float>>()
+        val timestampedSamples = mutableListOf<Pair<Double, List<Float>>>()
         
         try {
             csiSamplesBuffer.forEach { sample ->
+                // Calculate timestamp in seconds
+                val timestamp = sample.tsSec.toDouble() + (sample.tsUsec.toDouble() / 1_000_000.0)
+                
+                // Track first timestamp for relative timing
+                if (firstTimestamp == null) {
+                    firstTimestamp = sample.tsSec * 1_000_000L + sample.tsUsec
+                }
+                
+                // Calculate relative timestamp
+                val relativeTimestamp = (timestamp - (firstTimestamp!! / 1_000_000.0))
+                
                 val complexSamples = PcapProcessor.unpack(sample.csi, "default", fftshift = true)
                 val fullAmplitudes = complexSamples.map { 
                     kotlin.math.sqrt(it.re * it.re + it.im * it.im) 
@@ -181,6 +203,9 @@ class SpyCameraDetector private constructor() {
                 
                 // Add as an individual sample
                 sampleAmplitudesList.add(filteredAmplitudes)
+                
+                // Add to timestamped list for timeline
+                timestampedSamples.add(Pair(relativeTimestamp, filteredAmplitudes))
                 
                 log("Filtered CSI amplitudes to ${filteredAmplitudes.size} values from ${fullAmplitudes.size}")
             }
@@ -204,6 +229,13 @@ class SpyCameraDetector private constructor() {
                 log("Updated CSI PCA features: ${pcaFeatures.values.size} values")
             }
             
+            // Generate timeline
+            CoroutineScope(Dispatchers.IO).launch {
+                val normalizedTimeline = pcaExtractor.normalizeCSITimeline(timestampedSamples)
+                _csiTimeline.value = normalizedTimeline
+                log("Updated CSI timeline with ${normalizedTimeline.size} time points")
+            }
+            
             log("Updated CSI stats: ${_csiStats.value}")
         } catch (e: Exception) {
             log("Error updating CSI stats: ${e.message}")
@@ -218,6 +250,7 @@ class SpyCameraDetector private constructor() {
         if (bitrateSamplesBuffer.isEmpty()) {
             _bitrateStats.value = null
             _bitratePcaFeatures.value = null
+            _bitrateTimeline.value = emptyMap()
             return
         }
         
@@ -234,11 +267,23 @@ class SpyCameraDetector private constructor() {
             bitrateValues = bitrateValues
         )
         
+        // Create timestamped samples for timeline
+        val timestampedSamples = bitrateSamplesBuffer.map { sample ->
+            Pair(sample.timestamp.toDouble(), sample.bitrate)
+        }
+        
         // Extract PCA features
         CoroutineScope(Dispatchers.IO).launch {
             val pcaFeatures = pcaExtractor.extractBitrateFeatures(bitrateValues)
             _bitratePcaFeatures.value = pcaFeatures
             log("Updated bitrate PCA features: ${pcaFeatures.values.size} values")
+        }
+        
+        // Generate timeline
+        CoroutineScope(Dispatchers.IO).launch {
+            val normalizedTimeline = pcaExtractor.normalizeBitrateTimeline(timestampedSamples)
+            _bitrateTimeline.value = normalizedTimeline
+            log("Updated bitrate timeline with ${normalizedTimeline.size} time points")
         }
         
         log("Updated bitrate stats: ${_bitrateStats.value}")
@@ -271,10 +316,13 @@ class SpyCameraDetector private constructor() {
         log("Clearing data buffers")
         synchronized(csiSamplesBuffer) {
             csiSamplesBuffer.clear()
+            firstTimestamp = null
+            _csiTimeline.value = emptyMap()
             updateCsiStats()
         }
         synchronized(bitrateSamplesBuffer) {
             bitrateSamplesBuffer.clear()
+            _bitrateTimeline.value = emptyMap()
             updateBitrateStats()
         }
     }

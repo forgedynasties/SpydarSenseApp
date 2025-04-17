@@ -23,6 +23,21 @@ class TcpdumpManager(
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning
+    
+    // Stream file paths for continuous capture
+    private var csiStreamFile: String? = null
+    private var brStreamFile: String? = null
+    
+    // Processing job for monitoring stream file sizes
+    private var streamMonitorJob: Job? = null
+
+    // Add a trigger for processing
+    private val _processingTrigger = MutableStateFlow(0L)
+    val processingTrigger: StateFlow<Long> = _processingTrigger
+    
+    // Add functions to get the current streaming files
+    fun getCurrentCsiFile(): String? = csiStreamFile
+    fun getCurrentBrFile(): String? = brStreamFile
 
     init {
         File(outputDir).mkdirs()
@@ -34,7 +49,7 @@ class TcpdumpManager(
         } else {
             "tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
         }
-        Log.d("TcpdumpManager", "Starting tcpdump: $outputFile")
+        Log.d("TcpdumpManager", "Starting continuous tcpdump: $outputFile")
         shellExecutor.execute(command) { output, exitCode ->
             if (exitCode == 0) {
                 Log.d("TcpdumpManager", "tcpdump started successfully: $output")
@@ -56,53 +71,86 @@ class TcpdumpManager(
     }
 
     fun startCaptures() {
+        if (_isRunning.value) {
+            Log.d("TcpdumpManager", "Captures already running, ignoring start request")
+            return
+        }
+
         _isRunning.value = true
-        CoroutineScope(Dispatchers.IO).launch {
-            var i = 1
-            while (_isRunning.value) {
-                Log.d("TcpdumpManager", "Iteration $i: Starting")
-
-                val now = dateFormat.format(Date())
-
-                // Start CSI capture
-                val csiDir = "$outputDir/csi_$now.pcap"
-                val brDir = "$outputDir/cam_$now.pcap"
-                runTcpdump("wlan0", "dst port 5500", csiDir)
-
-                // Start bitrate capture
-                runTcpdump("wlan0", "ether src $etherSrc", brDir, "libnexmon.so")
-
-                // Let captures run for 60 seconds
-                delay(500)
-
-                stopTcpdump()
-                val startTime = System.currentTimeMillis()
-                var allProcessesStopped = false
-
-// Check if processes have stopped with a maximum wait time
-                while (!allProcessesStopped && System.currentTimeMillis() - startTime < 200) {
-                    // Check if tcpdump is still running
-                    shellExecutor.execute("pgrep tcpdump") { output, exitCode ->
-                        allProcessesStopped = exitCode != 0 || output.trim().isEmpty()
-                    }
-                    delay(50)
+        
+        // Generate unique file names for continuous streams
+        val timestamp = dateFormat.format(Date())
+        csiStreamFile = "$outputDir/csi_stream_$timestamp.pcap"
+        brStreamFile = "$outputDir/cam_stream_$timestamp.pcap"
+        
+        // Start continuous CSI capture
+        runTcpdump("wlan0", "dst port 5500", csiStreamFile!!)
+        
+        // Start continuous bitrate capture
+        runTcpdump("wlan0", "ether src $etherSrc", brStreamFile!!, "libnexmon.so")
+        
+        // Update directory lists immediately with the stream files
+        _csiDirs.value = _csiDirs.value + csiStreamFile!!
+        _brDirs.value = _brDirs.value + brStreamFile!!
+        
+        // IMPORTANT: Trigger initial processing immediately
+        _processingTrigger.value = System.currentTimeMillis()
+        
+        // Start monitoring job to check file growth and trigger processing
+        streamMonitorJob = CoroutineScope(Dispatchers.IO).launch {
+            var lastCsiSize = 0L
+            var lastBrSize = 0L
+            var forceTriggerCounter = 0
+            
+            while (isActive && _isRunning.value) {
+                delay(300) // Check more frequently (300ms)
+                
+                var shouldTriggerProcessing = false
+                forceTriggerCounter++
+                
+                // Force trigger processing every ~3 seconds even if files don't appear to grow
+                if (forceTriggerCounter >= 10) {
+                    shouldTriggerProcessing = true
+                    forceTriggerCounter = 0
+                    Log.d("TcpdumpManager", "Forcing data processing trigger (periodic)")
                 }
-
-
-                Log.d("TcpdumpManager", "Iteration $i: Finished")
-                PcapProcessor.processPcapCSI(csiDir)
-
-
-                _csiDirs.value = _csiDirs.value + csiDir
-                _brDirs.value = _brDirs.value + brDir
-
-                i++
+                
+                csiStreamFile?.let { file ->
+                    val currentSize = File(file).length()
+                    if (currentSize > lastCsiSize + 10) { // Lower threshold to 10 bytes for more sensitivity
+                        Log.d("TcpdumpManager", "CSI stream file has grown: $currentSize bytes (+${currentSize - lastCsiSize})")
+                        lastCsiSize = currentSize
+                        shouldTriggerProcessing = true
+                    }
+                }
+                
+                brStreamFile?.let { file ->
+                    val currentSize = File(file).length()
+                    if (currentSize > lastBrSize + 10) { // Lower threshold to 10 bytes for more sensitivity
+                        Log.d("TcpdumpManager", "Bitrate stream file has grown: $currentSize bytes (+${currentSize - lastBrSize})")
+                        lastBrSize = currentSize
+                        shouldTriggerProcessing = true
+                    }
+                }
+                
+                if (shouldTriggerProcessing) {
+                    // Trigger processing by emitting a new timestamp
+                    _processingTrigger.value = System.currentTimeMillis()
+                    Log.d("TcpdumpManager", "Triggering data processing")
+                }
             }
-            Log.d("TcpdumpManager", "Captures stopped")
         }
     }
 
     fun stopCaptures() {
+        if (!_isRunning.value) {
+            return
+        }
+        
         _isRunning.value = false
+        stopTcpdump()
+        streamMonitorJob?.cancel()
+        
+        Log.d("TcpdumpManager", "Captures stopped")
     }
 }

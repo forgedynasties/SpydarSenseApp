@@ -130,6 +130,9 @@ fun HomeScreen(navController: NavController) {
     // State to track the number of APs to display
     val displayedAPsCount = remember { mutableStateOf(3) }
     var isRefreshing by remember { mutableStateOf(false) }
+    
+    // Calculate if we're showing all APs
+    val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
 
     Scaffold(
         topBar = {
@@ -233,8 +236,16 @@ fun HomeScreen(navController: NavController) {
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     
-                    TextButton(onClick = { displayedAPsCount.value = allScannedAPs.size }) {
-                        Text("Show All")
+                    TextButton(
+                        onClick = { 
+                            if (isShowingAll) {
+                                displayedAPsCount.value = 3  // Reset to initial count
+                            } else {
+                                displayedAPsCount.value = allScannedAPs.size  // Show all
+                            }
+                        }
+                    ) {
+                        Text(if (isShowingAll) "Show Less" else "Show All")
                     }
                 }
 
@@ -255,7 +266,7 @@ fun HomeScreen(navController: NavController) {
 
 @Composable
 fun APCard(ap: AP, navController: NavController) {
-    // Calculate signal strength indicator (0-4)
+    // Calculate signal strength indicator (0-4) but we won't display the circle
     val signalStrength = when {
         ap.pwr >= -55 -> 4
         ap.pwr >= -65 -> 3
@@ -282,29 +293,10 @@ fun APCard(ap: AP, navController: NavController) {
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Signal strength indicator
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = signalStrength.toString(),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-            
-            // Network details
+            // Network details - removed the circular indicator
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 16.dp)
             ) {
                 ap.essid?.let {
                     Text(

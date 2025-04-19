@@ -82,12 +82,15 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
     // Force UI refresh periodically
     val refreshCounter = remember { mutableStateOf(0) }
     
-    // Periodically increment counter to force recomposition
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000) // Update every second
-            refreshCounter.value += 1
-            Log.d("DetectSpyCamScreen", "Forcing UI refresh")
+    // Periodically increment counter to force recomposition - only when collecting
+    LaunchedEffect(isCollecting) {
+        // Only run the periodic update when actively collecting
+        if (isCollecting) {
+            while (true) {
+                delay(1000) // Update every second
+                refreshCounter.value += 1
+                Log.d("DetectSpyCamScreen", "Forcing UI refresh")
+            }
         }
     }
     
@@ -99,384 +102,412 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
                 "Refresh cycle: ${refreshCounter.value}")
     }
 
+    // For progress indicator
+    val progressValue = remember(csiStats, bitrateStats) {
+        // Simple placeholder logic for the progress indicator
+        val csiCount = csiStats?.sampleCount ?: 0
+        val brCount = bitrateStats?.sampleCount ?: 0
+        
+        // Scale the progress based on sample count (max at 100)
+        val total = csiCount + brCount
+        val progress = (total.toFloat() / 100f).coerceIn(0f, 1f)
+        
+        // If collecting but no data yet, show indeterminate progress
+        if (isCollecting && total == 0) 0.1f else progress
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // App bar with theme toggle
-            Row(
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { 
+                        Text(
+                            "Detection",
+                            fontWeight = FontWeight.Medium
+                        ) 
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    actions = {
+                        ThemeToggle()
+                    }
+                )
+            },
+        ) { innerPadding ->
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "Detection",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                ThemeToggle()
-            }
-
-            // Target network info card
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                elevation = CardDefaults.elevatedCardElevation(
-                    defaultElevation = 2.dp
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = essid,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
+                // Target network info card
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.elevatedCardElevation(
+                        defaultElevation = 2.dp
                     )
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = "MAC Address",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                text = mac,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = "Channel",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                text = "$ch",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(4.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = "Signal Strength",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                text = "$pwr dBm",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        
-                        // Controls
-                        val buttonScale = animateFloatAsState(
-                            targetValue = if (isCollecting) 1.05f else 1f,
-                            label = "buttonScale"
-                        )
-                        
-                        Button(
-                            onClick = {
-                                if (isCollecting) {
-                                    detector.stopDetection()
-                                } else {
-                                    coroutineScope.launch {
-                                        detector.startDetection(mac, ch)
-                                    }
-                                }
-                                isCollecting = !isCollecting
-                            },
-                            modifier = Modifier.scale(buttonScale.value),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isCollecting) Color.Red else MaterialTheme.colorScheme.primary
-                            ),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(if (isCollecting) "Stop" else "Start")
-                        }
-                    }
-                }
-            }
-            
-            // Stats summary
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                elevation = CardDefaults.elevatedCardElevation(
-                    defaultElevation = 2.dp
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "Collection Summary",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = essid,
+                            style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         
-                        IconButton(onClick = { showExtraStats = !showExtraStats }) {
-                            Icon(
-                                imageVector = if (showExtraStats) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                contentDescription = if (showExtraStats) "Show less" else "Show more",
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "MAC Address",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = mac,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "Channel",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = "$ch",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(4.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Signal Strength",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = "$pwr dBm",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            
+                            // Controls
+                            val buttonScale = animateFloatAsState(
+                                targetValue = if (isCollecting) 1.05f else 1f,
+                                label = "buttonScale"
+                            )
+                            
+                            Button(
+                                onClick = {
+                                    if (isCollecting) {
+                                        detector.stopDetection()
+                                    } else {
+                                        coroutineScope.launch {
+                                            detector.startDetection(mac, ch)
+                                        }
+                                    }
+                                    isCollecting = !isCollecting
+                                },
+                                modifier = Modifier.scale(buttonScale.value),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isCollecting) Color.Red else MaterialTheme.colorScheme.primary
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(if (isCollecting) "Stop" else "Start")
+                            }
+                        }
+                    }
+                }
+                
+                // Stats summary
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.elevatedCardElevation(
+                        defaultElevation = 2.dp
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Collection Summary",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            
+                            IconButton(onClick = { showExtraStats = !showExtraStats }) {
+                                Icon(
+                                    imageVector = if (showExtraStats) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = if (showExtraStats) "Show less" else "Show more",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            StatColumn(
+                                title = "CSI Samples",
+                                value = "${csiStats?.sampleCount ?: 0}",
                                 tint = MaterialTheme.colorScheme.primary
                             )
+                            StatColumn(
+                                title = "Bitrate Samples",
+                                value = "${bitrateStats?.sampleCount ?: 0}",
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
                         }
-                    }
-                    
-                    Divider()
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        StatColumn(
-                            title = "CSI Samples",
-                            value = "${csiStats?.sampleCount ?: 0}",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        StatColumn(
-                            title = "Bitrate Samples",
-                            value = "${bitrateStats?.sampleCount ?: 0}",
-                            tint = MaterialTheme.colorScheme.secondary
-                        )
-                    }
-                    
-                    if (isCollecting) {
-                        LinearProgressIndicator(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .height(4.dp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        OutlinedButton(
-                            onClick = { detector.clearBuffers() },
-                            shape = RoundedCornerShape(8.dp)
+                        
+                        if (isCollecting) {
+                            // Fixed LinearProgressIndicator with explicit progress value
+                            LinearProgressIndicator(
+                                progress = progressValue,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .height(4.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
                         ) {
-                            Text("Clear Data")
+                            // Fixed clear data button with explicit onClick handler
+                            OutlinedButton(
+                                onClick = { 
+                                    detector.clearBuffers()
+                                    // Also manually update UI state to reflect cleared data
+                                    if (isCollecting) {
+                                        isCollecting = false
+                                    }
+                                },
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Clear Data")
+                            }
                         }
                     }
                 }
-            }
-            
-            // Detailed stats (collapsible)
-            AnimatedVisibility(
-                visible = showExtraStats,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                
+                // Detailed stats (collapsible)
+                AnimatedVisibility(
+                    visible = showExtraStats,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
                 ) {
-                    // CSI Timeline Card
-                    if (!csiTimeline.isEmpty()) {
-                        ElevatedCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // CSI Timeline Card
+                        if (!csiTimeline.isEmpty()) {
+                            ElevatedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text(
-                                    text = "CSI Timeline",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                
-                                Spacer(modifier = Modifier.height(8.dp))
-                                
-                                // Timeline visualization
-                                TimelineVisualization(
-                                    csiTimeline = csiTimeline,
-                                    bitrateTimeline = bitrateTimeline,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(180.dp)
-                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                        .padding(8.dp)
-                                )
-                            }
-                        }
-                    }
-                    
-                    // PCA Features Card (if available)
-                    if (csiPcaFeatures != null || bitratePcaFeatures != null) {
-                        ElevatedCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Text(
-                                    text = "PCA Features",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                
-                                Spacer(modifier = Modifier.height(12.dp))
-                                
-                                // CSI Features
-                                if (csiPcaFeatures?.values?.isNotEmpty() == true) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
                                     Text(
-                                        text = "CSI Features",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
+                                        text = "CSI Timeline",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     
-                                    LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        contentPadding = PaddingValues(vertical = 8.dp)
-                                    ) {
-                                        items(csiPcaFeatures?.values.orEmpty()) { value ->
-                                            PCAFeatureChip(value, "CSI")
-                                        }
-                                    }
-                                }
-                                
-                                Spacer(modifier = Modifier.height(8.dp))
-                                
-                                // Bitrate Features
-                                if (bitratePcaFeatures?.values?.isNotEmpty() == true) {
-                                    Text(
-                                        text = "Bitrate Features",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     
-                                    LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        contentPadding = PaddingValues(vertical = 8.dp)
-                                    ) {
-                                        items(bitratePcaFeatures?.values.orEmpty()) { value ->
-                                            PCAFeatureChip(value, "Bitrate")
-                                        }
-                                    }
+                                    // Timeline visualization
+                                    TimelineVisualization(
+                                        csiTimeline = csiTimeline,
+                                        bitrateTimeline = bitrateTimeline,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(180.dp)
+                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                            .padding(8.dp)
+                                    )
                                 }
                             }
                         }
-                    }
-                    
-                    // Detailed sample stats (only show if there are samples)
-                    if ((csiStats?.sampleCount ?: 0) > 0 || (bitrateStats?.sampleCount ?: 0) > 0) {
-                        var selectedTab by remember { mutableStateOf(0) }
                         
-                        ElevatedCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
+                        // PCA Features Card (if available)
+                        if (csiPcaFeatures != null || bitratePcaFeatures != null) {
+                            ElevatedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text(
-                                    text = "Detailed Statistics",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                
-                                Spacer(modifier = Modifier.height(8.dp))
-                                
-                                TabRow(
-                                    selectedTabIndex = selectedTab,
-                                    indicator = { tabPositions ->
-                                        TabRowDefaults.Indicator(
-                                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                                            height = 2.dp,
-                                            color = MaterialTheme.colorScheme.primary
+                                Column(
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = "PCA Features",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    
+                                    // CSI Features
+                                    if (csiPcaFeatures?.values?.isNotEmpty() == true) {
+                                        Text(
+                                            text = "CSI Features",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            contentPadding = PaddingValues(vertical = 8.dp)
+                                        ) {
+                                            items(csiPcaFeatures?.values.orEmpty()) { value ->
+                                                PCAFeatureChip(value, "CSI")
+                                            }
+                                        }
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    // Bitrate Features
+                                    if (bitratePcaFeatures?.values?.isNotEmpty() == true) {
+                                        Text(
+                                            text = "Bitrate Features",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            contentPadding = PaddingValues(vertical = 8.dp)
+                                        ) {
+                                            items(bitratePcaFeatures?.values.orEmpty()) { value ->
+                                                PCAFeatureChip(value, "Bitrate")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Detailed sample stats (only show if there are samples)
+                        if ((csiStats?.sampleCount ?: 0) > 0 || (bitrateStats?.sampleCount ?: 0) > 0) {
+                            var selectedTab by remember { mutableStateOf(0) }
+                            
+                            ElevatedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = "Detailed Statistics",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    TabRow(
+                                        selectedTabIndex = selectedTab,
+                                        indicator = { tabPositions ->
+                                            TabRowDefaults.Indicator(
+                                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                                                height = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    ) {
+                                        Tab(
+                                            selected = selectedTab == 0,
+                                            onClick = { selectedTab = 0 },
+                                            text = { Text("CSI") }
+                                        )
+                                        Tab(
+                                            selected = selectedTab == 1,
+                                            onClick = { selectedTab = 1 },
+                                            text = { Text("Bitrate") }
                                         )
                                     }
-                                ) {
-                                    Tab(
-                                        selected = selectedTab == 0,
-                                        onClick = { selectedTab = 0 },
-                                        text = { Text("CSI") }
-                                    )
-                                    Tab(
-                                        selected = selectedTab == 1,
-                                        onClick = { selectedTab = 1 },
-                                        text = { Text("Bitrate") }
-                                    )
-                                }
-                                
-                                when (selectedTab) {
-                                    0 -> {
-                                        // CSI Stats
-                                        if (csiStats == null) {
-                                            EmptyDataView("No CSI data available")
-                                        } else {
-                                            Column(
-                                                modifier = Modifier.padding(vertical = 12.dp)
-                                            ) {
-                                                StatRow("Samples", "${csiStats?.sampleCount}")
-                                                StatRow("Avg Amplitude", df.format(csiStats?.avgAmplitude))
-                                                StatRow("Min Amplitude", df.format(csiStats?.minAmplitude))
-                                                StatRow("Max Amplitude", df.format(csiStats?.maxAmplitude))
+                                    
+                                    when (selectedTab) {
+                                        0 -> {
+                                            // CSI Stats
+                                            if (csiStats == null) {
+                                                EmptyDataView("No CSI data available")
+                                            } else {
+                                                Column(
+                                                    modifier = Modifier.padding(vertical = 12.dp)
+                                                ) {
+                                                    StatRow("Samples", "${csiStats?.sampleCount}")
+                                                    StatRow("Avg Amplitude", df.format(csiStats?.avgAmplitude))
+                                                    StatRow("Min Amplitude", df.format(csiStats?.minAmplitude))
+                                                    StatRow("Max Amplitude", df.format(csiStats?.maxAmplitude))
+                                                }
                                             }
                                         }
-                                    }
-                                    1 -> {
-                                        // Bitrate Stats
-                                        if (bitrateStats == null) {
-                                            EmptyDataView("No bitrate data available")
-                                        } else {
-                                            Column(
-                                                modifier = Modifier.padding(vertical = 12.dp)
-                                            ) {
-                                                StatRow("Samples", "${bitrateStats?.sampleCount}")
-                                                StatRow("Avg Bitrate", "${df.format(bitrateStats?.avgBitrate)} bytes")
-                                                StatRow("Min Bitrate", "${bitrateStats?.minBitrate} bytes")
-                                                StatRow("Max Bitrate", "${bitrateStats?.maxBitrate} bytes")
+                                        1 -> {
+                                            // Bitrate Stats
+                                            if (bitrateStats == null) {
+                                                EmptyDataView("No bitrate data available")
+                                            } else {
+                                                Column(
+                                                    modifier = Modifier.padding(vertical = 12.dp)
+                                                ) {
+                                                    StatRow("Samples", "${bitrateStats?.sampleCount}")
+                                                    StatRow("Avg Bitrate", "${df.format(bitrateStats?.avgBitrate)} bytes")
+                                                    StatRow("Min Bitrate", "${bitrateStats?.minBitrate} bytes")
+                                                    StatRow("Max Bitrate", "${bitrateStats?.maxBitrate} bytes")
+                                                }
                                             }
                                         }
                                     }
@@ -485,9 +516,9 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
                         }
                     }
                 }
+                
+                Spacer(modifier = Modifier.height(24.dp))
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }

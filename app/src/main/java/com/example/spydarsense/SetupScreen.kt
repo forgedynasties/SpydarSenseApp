@@ -18,7 +18,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-
+import com.example.spydarsense.components.ThemeToggle
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,7 +47,10 @@ fun SetupScreen(navController: NavController) {
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                ),
+                actions = {
+                    ThemeToggle()
+                }
             )
         },
         bottomBar = {
@@ -54,10 +60,15 @@ fun SetupScreen(navController: NavController) {
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                enabled = true
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                enabled = true,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
             ) {
-                Text("Next")
+                Text("Next", modifier = Modifier.padding(vertical = 4.dp))
             }
         }
     ) { innerPadding ->
@@ -66,7 +77,7 @@ fun SetupScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.Top,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (commands.isNotEmpty()) {
@@ -94,6 +105,7 @@ fun SetupScreen(navController: NavController) {
         }
     }
 }
+
 @Composable
 fun CommandItem(
     command: Command,
@@ -102,30 +114,47 @@ fun CommandItem(
     shellExecutor: ShellExecutor
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val cardColor = if (isCompleted) 
+        MaterialTheme.colorScheme.primaryContainer 
+    else 
+        MaterialTheme.colorScheme.surface
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .animateContentSize(),
+        colors = CardDefaults.cardColors(
+            containerColor = cardColor
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 2.dp
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
                 text = command.description,
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Command: ${command.command}",
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = if (isCompleted) "✅ Completed" else "❌ Pending",
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isCompleted) 
+                    MaterialTheme.colorScheme.primary 
+                else 
+                    MaterialTheme.colorScheme.error
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Button(
                 onClick = {
                     coroutineScope.launch {
@@ -137,16 +166,17 @@ fun CommandItem(
                         }
                     }
                 },
-                enabled = !isCompleted
+                enabled = !isCompleted,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.align(Alignment.End)
             ) {
                 Text("Execute")
             }
         }
     }
 }
+
 // Simulate command execution
-
-
 suspend fun executeCommand(command: String, shellExecutor: ShellExecutor): String {
     return suspendCancellableCoroutine { continuation ->
         shellExecutor.execute(command) { output, exitCode ->

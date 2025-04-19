@@ -39,8 +39,12 @@ import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.CardDefaults
 import androidx.core.content.ContextCompat
 import com.example.spydarsense.data.AP
+import com.example.spydarsense.components.ThemeToggle
+import com.example.spydarsense.ui.theme.rememberThemeState
 
 class MainActivity : ComponentActivity() {
 
@@ -65,7 +69,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            SpydarSenseTheme(darkTheme = true) {
+            val isDarkTheme = rememberThemeState()
+            
+            SpydarSenseTheme(darkTheme = isDarkTheme.value) {
                 val navController = rememberNavController()
                 val setup = true // Set to true to show the setup screen
 
@@ -110,7 +116,10 @@ fun HomeScreen(navController: NavController) {
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary, // Use primary color from theme
                     titleContentColor = MaterialTheme.colorScheme.onPrimary // Use onPrimary color from theme
-                )
+                ),
+                actions = {
+                    ThemeToggle()
+                }
             )
         }
     ) { innerPadding ->
@@ -119,19 +128,22 @@ fun HomeScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(WindowInsets.systemBars.asPaddingValues())
-            .padding(16.dp),
-            verticalArrangement = Arrangement.Top,
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Display the number of APs scanned
             Text(
                 text = "Total APs Scanned: ${allScannedAPs.size}",
                 style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(vertical = 8.dp)
             )
 
-            // Display the list of APs
-            LazyColumn {
+            // Display the list of APs with improved spacing
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
                 items(allScannedAPs.take(displayedAPsCount.value)) { ap ->
                     APCard(ap, navController)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -166,7 +178,11 @@ fun APCard(ap: AP, navController: NavController) {
             .clickable {
                 navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/${ap.pwr}/${ap.ch}")
             }
-            .padding(8.dp)
+            .padding(8.dp),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 4.dp,
+            pressedElevation = 2.dp
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
@@ -178,9 +194,6 @@ fun APCard(ap: AP, navController: NavController) {
         }
     }
 }
-
-
-
 
 @Preview(showBackground = true)
 @Composable

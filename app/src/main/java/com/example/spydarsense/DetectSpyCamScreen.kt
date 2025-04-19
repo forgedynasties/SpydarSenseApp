@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
@@ -37,7 +36,16 @@ import kotlin.math.min
 import androidx.compose.ui.text.rememberTextMeasurer
 import android.util.Log
 import kotlinx.coroutines.delay
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.draw.scale
+import com.example.spydarsense.components.ThemeToggle
+import com.example.spydarsense.ui.theme.rememberThemeState
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
     val detector = remember { SpyCameraDetector.getInstance() }
@@ -95,12 +103,45 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
                 .fillMaxSize()
                 .padding(16.dp)
                 .verticalScroll(scrollState), // Make the screen scrollable
-            verticalArrangement = Arrangement.Top,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Display AP information
-            Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
-                Column(modifier = Modifier.padding(16.dp)) {
+            // Top app bar with theme toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Detection Results",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                ThemeToggle()
+            }
+
+            // Display AP information with improved styling
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Network Information",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
                     Text(text = "SSID: $essid", style = MaterialTheme.typography.bodyLarge)
                     Text(text = "MAC Address: $mac", style = MaterialTheme.typography.bodyMedium)
                     Text(text = "Signal Strength: $pwr dBm", style = MaterialTheme.typography.bodyMedium)
@@ -110,14 +151,15 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
 
             Spacer(modifier = Modifier.height(16.dp))
             
-            // Sample Count Summary Card
+            // Sample Count Summary Card with animation
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(8.dp),
+                    .animateContentSize(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -431,14 +473,19 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Controls Row
+            // Controls Row with improved styling
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
             ) {
-                // Start/Stop Button
+                // Start/Stop Button with animation
+                val buttonScale = animateFloatAsState(
+                    targetValue = if (isCollecting) 1.05f else 1f,
+                    label = "buttonScale"
+                )
+                
                 Button(
                     onClick = {
                         if (isCollecting) {
@@ -450,11 +497,16 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
                         }
                         isCollecting = !isCollecting
                     },
+                    modifier = Modifier.scale(buttonScale.value),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isCollecting) Color.Red else MaterialTheme.colorScheme.primary
-                    )
+                    ),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text(if (isCollecting) "Stop Collection" else "Start Collection")
+                    Text(
+                        if (isCollecting) "Stop Collection" else "Start Collection",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
 
                 // Clear Data Button
@@ -464,9 +516,13 @@ fun DetectSpyCamScreen(essid: String, mac: String, pwr: Int, ch: Int) {
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.secondary
-                    )
+                    ),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Clear Data")
+                    Text(
+                        "Clear Data",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
             
@@ -633,6 +689,7 @@ fun TimelineVisualization(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CSISampleCard(amplitudes: List<Float>) {
     val df = remember { DecimalFormat("#.##") }
@@ -641,7 +698,11 @@ fun CSISampleCard(amplitudes: List<Float>) {
         modifier = Modifier
             .width(160.dp)
             .padding(4.dp),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
@@ -668,13 +729,18 @@ fun CSISampleCard(amplitudes: List<Float>) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BitrateSampleCard(bitrate: Int) {
     Card(
         modifier = Modifier
             .width(120.dp)
             .padding(4.dp),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
@@ -698,6 +764,7 @@ fun BitrateSampleCard(bitrate: Int) {
 }
 
 // Add a new composable for displaying PCA feature cards
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PCAFeatureCard(value: Float, type: String) {
     val df = remember { DecimalFormat("#.####") }
@@ -706,7 +773,11 @@ fun PCAFeatureCard(value: Float, type: String) {
         modifier = Modifier
             .width(120.dp)
             .padding(4.dp),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier

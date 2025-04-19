@@ -22,16 +22,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// Add these color definitions to enhance our palette
+private val neutralLight = Color(0xFFF6F6F6)
+private val neutralDark = Color(0xFF1D1D1D)
+
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
     secondary = PurpleGrey80,
-    tertiary = Pink80
+    tertiary = Pink80,
+    surface = Color(0xFF1A1C1E),
+    surfaceVariant = Color(0xFF2D3133),
+    outlineVariant = Color(0xFF3F4446)
 )
 
 private val LightColorScheme = lightColorScheme(
     primary = Purple40,
     secondary = PurpleGrey40,
-    tertiary = Pink40
+    tertiary = Pink40,
+    surface = Color(0xFFFBFBFB),
+    surfaceVariant = Color(0xFFE7E7EC),
+    outlineVariant = Color(0xFFD0D0D8)
 
     /* Other default colors to override
     background = Color(0xFFFFFBFE),

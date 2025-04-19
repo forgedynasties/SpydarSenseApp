@@ -54,74 +54,138 @@ object PcapProcessor {
         val file = File(pcapFilepath)
         val pcapFileSize = file.length()
         if (pcapFileSize < 36) {
-
-            Log.e("PcapCSI", "PCAP file is too small to contain valid data. File size: $pcapFileSize")
+            Log.e("PcapCSI", "[CSI] PCAP file is too small to contain valid data. File size: $pcapFileSize")
             return emptyList()
         }
-        val fc = file.readBytes()
+        
+        try {
+            val fc = file.readBytes()
 
-        val bw = bandwidth ?: findBandwidth(fc.sliceArray(32 until 36))
-        val nsub = (bw * 3.2).toInt()
-        val sampleSize = 38 + (nsub * 4)
-        val nsamplesMax = findNsamplesMax(pcapFileSize, nsub)
+            val bw = bandwidth ?: findBandwidth(fc.sliceArray(32 until 36))
+            val nsub = (bw * 3.2).toInt()
+            val sampleSize = 38 + (nsub * 4)
+            
+            // Calculate a safe number of samples based on file size
+            val nsamplesMax = findNsamplesMax(pcapFileSize, nsub)
+            
+            // Create a buffer that can safely hold all samples
+            val sampleBuffer = ByteArray(nsamplesMax * sampleSize)
+            var dataIndex = 0
+            var ptr = 24
+            var nsamples = 0
 
-        val sampleBuffer = ByteArray(nsamplesMax * sampleSize)
-        var dataIndex = 0
-        var ptr = 24
-        var nsamples = 0
-
-        while (ptr < pcapFileSize && ptr + 12 < pcapFileSize) {
-            val frameLen = ByteBuffer.wrap(fc, ptr + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int
-
-            System.arraycopy(fc, ptr, sampleBuffer, dataIndex, 8)
-            if (ptr + 54 <= pcapFileSize) {
-                System.arraycopy(fc, ptr + 42, sampleBuffer, dataIndex + 8, 12)
+            while (ptr < pcapFileSize && ptr + 12 < pcapFileSize && nsamples < nsamplesMax) {
+                // Make sure we have enough bytes to read the frame length
+                if (ptr + 11 >= fc.size) {
+                    Log.d("PcapCSI", "[CSI] Reached end of file or insufficient data for frame length")
+                    break
+                }
+                
+                val frameLen = ByteBuffer.wrap(fc, ptr + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                
+                // Safety check: ensure frameLen is reasonable
+                if (frameLen < 0 || frameLen > 65535) {
+                    Log.e("PcapCSI", "[CSI] Invalid frame length: $frameLen at position $ptr, skipping")
+                    ptr += 16  // Skip this packet header and try next
+                    continue
+                }
+                
+                // Only copy if we have room in the buffer
+                if (dataIndex + sampleSize > sampleBuffer.size) {
+                    Log.e("PcapCSI", "[CSI] Sample buffer full, stopping at $nsamples samples")
+                    break
+                }
+                
+                // Check bounds for first copy
+                if (ptr + 8 <= fc.size && dataIndex + 8 <= sampleBuffer.size) {
+                    System.arraycopy(fc, ptr, sampleBuffer, dataIndex, 8)
+                } else {
+                    Log.e("PcapCSI", "[CSI] Buffer bounds exceeded for first copy")
+                    break
+                }
+                
+                // Check bounds for second copy
+                if (ptr + 54 <= fc.size && dataIndex + 20 <= sampleBuffer.size && ptr + 42 + 12 <= fc.size) {
+                    System.arraycopy(fc, ptr + 42, sampleBuffer, dataIndex + 8, 12)
+                } else {
+                    // If we can't complete this packet, break out
+                    Log.e("PcapCSI", "[CSI] Buffer bounds exceeded for second copy")
+                    break
+                }
+                
+                ptr += 58
+                val remaining = sampleSize - 20
+                
+                // Check bounds for third copy
+                if (ptr + remaining <= fc.size && dataIndex + 20 + remaining <= sampleBuffer.size) {
+                    System.arraycopy(fc, ptr, sampleBuffer, dataIndex + 20, remaining)
+                } else {
+                    Log.e("PcapCSI", "[CSI] Buffer bounds exceeded for third copy: " +
+                           "src.length=${fc.size} srcPos=$ptr " +
+                           "dst.length=${sampleBuffer.size} dstPos=${dataIndex + 20} " +
+                           "length=$remaining")
+                    break
+                }
+                
+                nsamples++
+                ptr += frameLen - 42
+                dataIndex += sampleSize
             }
-            ptr += 58
-            val remaining = sampleSize - 20
-            if (ptr + remaining <= pcapFileSize) {
-                System.arraycopy(fc, ptr, sampleBuffer, dataIndex + 20, remaining)
+
+            Log.d("PcapCSI", "[CSI] Successfully parsed $nsamples samples from file")
+
+            // Parse the samples from the buffer
+            val samples = mutableListOf<CSISample>()
+            var offset = 0
+            for (i in 0 until nsamples) {
+                // Safety check for buffer boundaries
+                if (offset + sampleSize > sampleBuffer.size) {
+                    Log.e("PcapCSI", "[CSI] Buffer index out of bounds when parsing sample $i")
+                    break
+                }
+                
+                try {
+                    val buffer = ByteBuffer.wrap(sampleBuffer, offset, sampleSize)
+                    buffer.order(ByteOrder.LITTLE_ENDIAN)
+                    val tsSec = buffer.int
+                    val tsUsec = buffer.int
+                    buffer.order(ByteOrder.BIG_ENDIAN)
+                    val saddr = buffer.int
+                    val daddr = buffer.int
+                    val sport = buffer.short
+                    val dport = buffer.short
+                    buffer.order(ByteOrder.LITTLE_ENDIAN)
+                    val magic = buffer.short
+                    val rssi = buffer.get()
+                    val fctl = buffer.get()
+                    val mac = ByteArray(6)
+                    buffer.get(mac)
+                    val seq = buffer.short
+                    val css = buffer.short
+                    val csp = buffer.short
+                    val cvr = buffer.short
+                    val csi = ShortArray(nsub * 2)
+                    for (j in csi.indices) {
+                        csi[j] = buffer.short
+                    }
+                    samples.add(
+                        CSISample(
+                            tsSec, tsUsec, saddr, daddr, sport, dport, magic,
+                            rssi, fctl, mac, seq, css, csp, cvr, csi
+                        )
+                    )
+                    offset += sampleSize
+                } catch (e: Exception) {
+                    Log.e("PcapCSI", "[CSI] Error parsing sample $i: ${e.message}")
+                    break
+                }
             }
-            nsamples++
-            ptr += frameLen - 42
-            dataIndex += sampleSize
+            return samples
+        } catch (e: Exception) {
+            Log.e("PcapCSI", "[CSI] Error reading PCAP file: ${e.message}")
+            e.printStackTrace()
+            return emptyList()
         }
-
-        val samples = mutableListOf<CSISample>()
-        var offset = 0
-        for (i in 0 until nsamples) {
-            val buffer = ByteBuffer.wrap(sampleBuffer, offset, sampleSize)
-            buffer.order(ByteOrder.LITTLE_ENDIAN)
-            val tsSec = buffer.int
-            val tsUsec = buffer.int
-            buffer.order(ByteOrder.BIG_ENDIAN)
-            val saddr = buffer.int
-            val daddr = buffer.int
-            val sport = buffer.short
-            val dport = buffer.short
-            buffer.order(ByteOrder.LITTLE_ENDIAN)
-            val magic = buffer.short
-            val rssi = buffer.get()
-            val fctl = buffer.get()
-            val mac = ByteArray(6)
-            buffer.get(mac)
-            val seq = buffer.short
-            val css = buffer.short
-            val csp = buffer.short
-            val cvr = buffer.short
-            val csi = ShortArray(nsub * 2)
-            for (j in csi.indices) {
-                csi[j] = buffer.short
-            }
-            samples.add(
-                CSISample(
-                    tsSec, tsUsec, saddr, daddr, sport, dport, magic,
-                    rssi, fctl, mac, seq, css, csp, cvr, csi
-                )
-            )
-            offset += sampleSize
-        }
-        return samples
     }
 
     fun unpack(
@@ -188,17 +252,17 @@ object PcapProcessor {
             val currentSize = file.length()
             
             // Debug logging for file growth
-            Log.d("CSISampleReader", "File $pcapFilepath: last position = $lastPosition, current size = $currentSize")
+            Log.d("CSISampleReader", "[CSI] File $pcapFilepath: last position = $lastPosition, current size = $currentSize")
             
             // If the file hasn't grown since last read, return empty list
             if (currentSize <= lastPosition) {
-                Log.d("CSISampleReader", "No new data in file $pcapFilepath")
+                Log.d("CSISampleReader", "[CSI] No new data in file $pcapFilepath")
                 return emptyList()
             }
             
             // IMPORTANT FIX: For streaming files, simply read the entire file each time
             // This is simpler and more reliable than trying to parse partial PCAP files
-            Log.d("CSISampleReader", "Reading entire PCAP file and processing new data")
+            Log.d("CSISampleReader", "[CSI] Reading entire PCAP file and processing new data")
             val samples = readPcap(pcapFilepath)
             
             // Only keep samples we haven't processed before (if any)
@@ -214,13 +278,13 @@ object PcapProcessor {
             // Update the last read position ONLY if we successfully read samples
             if (samples.isNotEmpty()) {
                 lastReadPositions[pcapFilepath] = currentSize
-                Log.d("CSISampleReader", "Updated last position to $currentSize")
+                Log.d("CSISampleReader", "[CSI] Updated last position to $currentSize, got ${samples.size} samples")
             }
             
-            Log.d("CSISampleReader", "Parsed ${newSamples.size} new CSI samples from $pcapFilepath")
+            Log.d("CSISampleReader", "[CSI] Parsed ${newSamples.size} new CSI samples from $pcapFilepath")
             return newSamples
         } catch (e: Exception) {
-            Log.e("CSISampleReader", "Error parsing pcap file: ${e.message}")
+            Log.e("CSISampleReader", "[CSI] Error parsing pcap file: ${e.message}")
             e.printStackTrace()
             return emptyList()
         }
@@ -295,9 +359,9 @@ object PcapProcessor {
             val complexSamples = unpack(csiSample.csi, "default", fftshift = true)
             val amplitudes = complexSamples.map { sqrt(it.re * it.re + it.im * it.im) }
             val timestamp = csiSample.tsSec * 1_000_000L + csiSample.tsUsec
-            Log.d("CSISampleReader", "CSI Sample amplitudes: $amplitudes")
+            Log.d("CSISampleReader", "[CSI] Sample amplitudes: $amplitudes")
         } catch (e: Exception) {
-            Log.e("CSISampleReader", "Error processing CSI sample: ${e.message}")
+            Log.e("CSISampleReader", "[CSI] Error processing CSI sample: ${e.message}")
         }
     }
 
@@ -310,18 +374,18 @@ object PcapProcessor {
             val pcapFileSize = file.length()
             
             // Debug logging for file growth
-            Log.d("PcapBitrate", "File $pcapFilepath: last position = $lastPosition, current size = $pcapFileSize")
+            Log.d("PcapBitrate", "[BITRATE] File $pcapFilepath: last position = $lastPosition, current size = $pcapFileSize")
             
             // If the file hasn't grown since last read, return empty list
             if (pcapFileSize <= lastPosition || pcapFileSize < 36) {
-                Log.d("PcapBitrate", "No new data in file $pcapFilepath")
+                Log.d("PcapBitrate", "[BITRATE] No new data in file $pcapFilepath")
                 return emptyList()
             }
             
             // IMPORTANT FIX: Use a simulated approach to generate some bitrate samples for testing
             // This ensures we always get some data to display
             val numNewSamples = ((pcapFileSize - lastPosition) / 100).toInt().coerceAtLeast(1)
-            Log.d("PcapBitrate", "Generating $numNewSamples simulated bitrate samples")
+            Log.d("PcapBitrate", "[BITRATE] Generating $numNewSamples simulated bitrate samples")
             
             val samples = mutableListOf<BitrateSample>()
             val random = Random()
@@ -343,11 +407,11 @@ object PcapProcessor {
             
             // Update the last read position
             lastReadPositions[pcapFilepath] = pcapFileSize
-            Log.d("PcapBitrate", "Updated last position to $pcapFileSize")
+            Log.d("PcapBitrate", "[BITRATE] Updated last position to $pcapFileSize, got ${samples.size} samples")
             
             return samples
         } catch (e: Exception) {
-            Log.e("PcapBitrate", "Error processing bitrate file: ${e.message}")
+            Log.e("PcapBitrate", "[BITRATE] Error processing bitrate file: ${e.message}")
             e.printStackTrace()
             return emptyList()
         }

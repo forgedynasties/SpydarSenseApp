@@ -20,7 +20,9 @@ class CSIBitrateCollector(val tcpdumpManager: TcpdumpManager) {
   
     fun collectCSIBitrate(mac: String, ch: Int) {
         CoroutineScope(Dispatchers.IO).launch {
-            val csiParams = "BhABEQGIAQCsbJAijzcAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            val csiParams = "ARABEQGIAQCsbJAijzcAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            //val csiParam = makeCSIParams(mac, ch)
+
 
             Log.d("CSIBitrateCollector", "Collecting CSI with params: $csiParams")
             val nexutilCommand = "nexutil -Iwlan0 -s500 -b -l34 -v$csiParams"

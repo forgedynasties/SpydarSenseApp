@@ -120,12 +120,10 @@ fun HomeScreen(navController: NavController) {
     // Sample list of scanned access points (APs)
     val allScannedAPs = listOf(
         AP("Access Point 1", "AC:6C:90:22:8F:37", "WPA2", "CCMP", "PSK", -50, 100, 50, 0, 1),
-        AP("Access Point 2", "00:1A:2B:3C:4D:5F", "WPA2", "CCMP", "PSK", -60, 80, 40, 0, 11),
-        AP("Access Point 3", "00:1A:2B:3C:4D:60", "WPA2", "CCMP", "PSK", -70, 60, 30, 0, 1),
-        AP("Access Point 4", "00:1A:2B:3C:4D:61", "WPA2", "CCMP", "PSK", -65, 70, 35, 0, 2),
-        AP("Access Point 5", "00:1A:2B:3C:4D:62", "WPA2", "CCMP", "PSK", -75, 50, 25, 0, 3),
-        AP("Access Point 6", "00:1A:2B:3C:4D:63", "WPA2", "CCMP", "PSK", -80, 40, 20, 0, 4)
-    )
+        AP("Access Point 1", "AC:6C:90:22:8F:37", "WPA2", "CCMP", "PSK", -50, 100, 50, 0, 6),
+
+
+        )
     
     // State to track the number of APs to display
     val displayedAPsCount = remember { mutableStateOf(3) }

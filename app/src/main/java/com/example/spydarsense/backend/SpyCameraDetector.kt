@@ -167,6 +167,11 @@ class SpyCameraDetector private constructor() {
      */
     suspend fun startDetection(macAddress: String, channel: Int) {
         log("Starting detection for MAC: $macAddress on channel: $channel")
+        
+        // Clear any existing data before starting new detection
+        clearBuffers()
+        
+        // Start the detection process
         csiCollector.collectCSIBitrate(macAddress, channel)
     }
 
@@ -369,21 +374,38 @@ class SpyCameraDetector private constructor() {
      * Clear the data buffers
      */
     fun clearBuffers() {
-        log("Clearing data buffers")
+        log("Clearing all data buffers and states")
+        
+         // Stop any active captures first and clear data in TcpdumpManager
+        tcpdumpManager.clearData()
+        
+        // Clear processed directory tracking
+        processedCsiDirs.clear()
+        processedBrDirs.clear()
+        
+        // Clear data buffers
         synchronized(csiSamplesBuffer) {
             csiSamplesBuffer.clear()
-            firstTimestamp = null
-            _csiTimeline.value = emptyMap()
-            updateCsiStats()
         }
         synchronized(bitrateSamplesBuffer) {
             bitrateSamplesBuffer.clear()
-            _bitrateTimeline.value = emptyMap()
-            updateBitrateStats()
         }
         
-        // Clear tracked file positions
+        // Reset the first timestamp
+        firstTimestamp = null
+        
+        // Reset all state flows to empty values
+        _csiTimeline.value = emptyMap()
+        _bitrateTimeline.value = emptyMap()
+        _csiStats.value = null
+        _bitrateStats.value = null
+        _csiPcaFeatures.value = null
+        _bitratePcaFeatures.value = null
+        
+        // Clear tracked file positions in PcapProcessor
         PcapProcessor.clearTrackedPositions()
+        
+        log("All data buffers and states have been cleared")
     }
 
     private fun log(message: String) {

@@ -41,16 +41,21 @@ fun SetupScreen(navController: NavController) {
         completedCommands.isNotEmpty() && completedCommands.all { it } 
     }
 
+    // Initialize completedCommands with the correct size and all false
     LaunchedEffect(commands) {
+        completedCommands.clear() // Ensure we start fresh
         completedCommands.addAll(List(commands.size) { false })
     }
 
     val shellExecutor = remember { ShellExecutor() }
+    // Initialize progress to 0f instead of relying on default value
     val progressAnimation = remember { Animatable(0f) }
     
+    // Update progress animation whenever completedCommands changes
     LaunchedEffect(completedCommands) {
         val completedCount = completedCommands.count { it }
         val targetValue = if (commands.isEmpty()) 1f else completedCount.toFloat() / commands.size
+        Log.d("SetupScreen", "Updating progress: $completedCount/${commands.size} = $targetValue")
         progressAnimation.animateTo(
             targetValue = targetValue,
             animationSpec = tween(500, easing = FastOutSlowInEasing)

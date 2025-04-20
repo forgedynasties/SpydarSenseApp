@@ -151,6 +151,24 @@ class TcpdumpManager(
         stopTcpdump()
         streamMonitorJob?.cancel()
         
+        // Reset stream files when stopping capture
+        csiStreamFile = null
+        brStreamFile = null
+        
         Log.d("TcpdumpManager", "Captures stopped")
+    }
+
+    // Add a new method to clear all data
+    fun clearData() {
+        stopCaptures()
+        
+        // Clear the directory lists
+        _csiDirs.value = emptyList()
+        _brDirs.value = emptyList()
+        
+        // Reset the trigger
+        _processingTrigger.value = 0L
+        
+        Log.d("TcpdumpManager", "All data cleared")
     }
 }

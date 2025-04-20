@@ -55,12 +55,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.spydarsense.backend.WifiScanner
 import com.example.spydarsense.components.ThemeToggle
 import com.example.spydarsense.data.AP
 import com.example.spydarsense.ui.theme.rememberThemeState
@@ -87,6 +89,9 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
 
+        // Initialize the WifiScanner
+        val wifiScanner = WifiScanner.getInstance()
+
         setContent {
             val isDarkTheme = rememberThemeState()
             
@@ -99,7 +104,7 @@ class MainActivity : ComponentActivity() {
                         SetupScreen(navController)
                     }
                     composable("home") {
-                        HomeScreen(navController)
+                        HomeScreen(navController, wifiScanner)
                     }
                     composable("detectSpyCam/{essid}/{mac}/{pwr}/{ch}") { backStackEntry ->
                         val essid = backStackEntry.arguments?.getString("essid") ?: ""
@@ -116,16 +121,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(navController: NavController) {
-    // Sample list of scanned access points (APs)
-    val allScannedAPs = listOf(
-        AP("Access Point 1", "AC:6C:90:22:8F:37", "WPA2", "CCMP", "PSK", -50, 100, 50, 0, 1),
-        AP("Access Point 2", "00:1A:2B:3C:4D:5F", "WPA2", "CCMP", "PSK", -60, 80, 40, 0, 11),
-        AP("Access Point 3", "00:1A:2B:3C:4D:60", "WPA2", "CCMP", "PSK", -70, 60, 30, 0, 1),
-        AP("Access Point 4", "00:1A:2B:3C:4D:61", "WPA2", "CCMP", "PSK", -65, 70, 35, 0, 2),
-        AP("Access Point 5", "00:1A:2B:3C:4D:62", "WPA2", "CCMP", "PSK", -75, 50, 25, 0, 3),
-        AP("Access Point 6", "00:1A:2B:3C:4D:63", "WPA2", "CCMP", "PSK", -80, 40, 20, 0, 4)
-    )
+fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScanner.getInstance()) {
+    // Get APs from WifiScanner instead of hardcoded list
+    val allScannedAPs = wifiScanner.allAPs.collectAsState().value
+    val isScanning = wifiScanner.isScanning.collectAsState().value
     
     // State to track the number of APs to display
     val displayedAPsCount = remember { mutableStateOf(3) }
@@ -133,6 +132,13 @@ fun HomeScreen(navController: NavController) {
     
     // Calculate if we're showing all APs
     val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
+
+    // Start scanning when the screen is shown
+    LaunchedEffect(Unit) {
+        if (!isScanning) {
+            wifiScanner.startScanning()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -255,7 +261,7 @@ fun HomeScreen(navController: NavController) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    items(allScannedAPs.take(displayedAPsCount.value)) { ap ->
+                    items(allScannedAPs.take(displayedAPsCount.value)) { ap -> 
                         APCard(ap, navController)
                     }
                 }

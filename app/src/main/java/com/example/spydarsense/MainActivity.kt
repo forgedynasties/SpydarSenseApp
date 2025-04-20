@@ -55,6 +55,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -272,20 +273,12 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
 
 @Composable
 fun APCard(ap: AP, navController: NavController) {
-    // Calculate signal strength indicator (0-4) but we won't display the circle
-    val signalStrength = when {
-        ap.pwr >= -55 -> 4
-        ap.pwr >= -65 -> 3
-        ap.pwr >= -75 -> 2
-        ap.pwr >= -85 -> 1
-        else -> 0
-    }
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/${ap.pwr}/${ap.ch}")
+                // Pass only available fields
+                navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/0/${ap.ch}")
             },
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(
@@ -299,7 +292,7 @@ fun APCard(ap: AP, navController: NavController) {
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Network details - removed the circular indicator
+            // Network details
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -317,20 +310,11 @@ fun APCard(ap: AP, navController: NavController) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "CH ${ap.ch}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                    Text(
-                        text = "${ap.pwr} dBm",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
+                Text(
+                    text = "CH ${ap.ch}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
             }
             
             // Arrow indicator

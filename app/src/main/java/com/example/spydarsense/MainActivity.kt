@@ -49,10 +49,13 @@ import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.LaunchedEffect
@@ -124,21 +127,52 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScanner.getInstance()) {
     // Get APs from WifiScanner instead of hardcoded list
-    val allScannedAPs = wifiScanner.allAPs.collectAsState().value
+    val filteredAPs = wifiScanner.filteredAPs.collectAsState().value
     val isScanning = wifiScanner.isScanning.collectAsState().value
+    val statusMessage = wifiScanner.statusMessage.collectAsState().value
+    
+    // State for filter dialog
+    val showFilterDialog = remember { mutableStateOf(false) }
+    var minSignal by remember { mutableStateOf(-90) }
+    var selectedChannel by remember { mutableStateOf<Int?>(null) }
+    var showSavedOnly by remember { mutableStateOf(false) }
     
     // State to track the number of APs to display
     val displayedAPsCount = remember { mutableStateOf(3) }
     var isRefreshing by remember { mutableStateOf(false) }
     
     // Calculate if we're showing all APs
-    val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
+    val isShowingAll = displayedAPsCount.value >= filteredAPs.size
 
     // Start scanning when the screen is shown
     LaunchedEffect(Unit) {
         if (!isScanning) {
             wifiScanner.startScanning()
         }
+    }
+    
+    // Show filter dialog if needed
+    if (showFilterDialog.value) {
+        FilterDialog(
+            currentMinSignal = minSignal,
+            currentChannel = selectedChannel,
+            showSavedOnly = showSavedOnly,
+            onDismiss = { showFilterDialog.value = false },
+            onApply = { newMinSignal, newChannel, newShowSavedOnly ->
+                minSignal = newMinSignal
+                selectedChannel = newChannel
+                showSavedOnly = newShowSavedOnly
+                
+                // Apply the new filters
+                wifiScanner.setFilterOptions(
+                    minSignal = newMinSignal,
+                    channel = newChannel,
+                    onlySavedNetworks = newShowSavedOnly
+                )
+                
+                showFilterDialog.value = false
+            }
+        )
     }
 
     Scaffold(
@@ -161,14 +195,17 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { /* Scan for new APs */ },
+                onClick = { 
+                    // Force refresh scan when button is clicked
+                    wifiScanner.forceRefreshScan()
+                },
                 shape = CircleShape,
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
-                    contentDescription = "Scan for APs"
+                    contentDescription = "Refresh Scan"
                 )
             }
         }
@@ -207,23 +244,23 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
                     ) {
                         Column {
                             Text(
-                                text = "${allScannedAPs.size}",
+                                text = "${filteredAPs.size}",
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "Networks Found",
+                                text = statusMessage,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
                         
                         OutlinedButton(
-                            onClick = { /* Filter options */ },
+                            onClick = { showFilterDialog.value = true },
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Filter")
+                            Text("⏳")
                         }
                     }
                 }
@@ -248,7 +285,7 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
                             if (isShowingAll) {
                                 displayedAPsCount.value = 3  // Reset to initial count
                             } else {
-                                displayedAPsCount.value = allScannedAPs.size  // Show all
+                                displayedAPsCount.value = filteredAPs.size  // Show all
                             }
                         }
                     ) {
@@ -256,19 +293,115 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
                     }
                 }
 
-                // AP list
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp)
-                ) {
-                    items(allScannedAPs.take(displayedAPsCount.value)) { ap -> 
-                        APCard(ap, navController)
+                // AP list with empty state
+                if (filteredAPs.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Text("No networks found")
+                            OutlinedButton(
+                                onClick = { wifiScanner.forceRefreshScan() }
+                            ) {
+                                Text("Refresh Scan")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(filteredAPs.take(displayedAPsCount.value)) { ap -> 
+                            APCard(ap, navController)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+fun FilterDialog(
+    currentMinSignal: Int,
+    currentChannel: Int?,
+    showSavedOnly: Boolean,
+    onDismiss: () -> Unit,
+    onApply: (minSignal: Int, channel: Int?, showSavedOnly: Boolean) -> Unit
+) {
+    var minSignal by remember { mutableStateOf(currentMinSignal) }
+    var selectedChannel by remember { mutableStateOf(currentChannel) }
+    var savedOnly by remember { mutableStateOf(showSavedOnly) }
+    
+    val availableChannels = listOf(
+        null, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 36, 40, 44, 48
+    )
+    
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Filter Networks") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Min signal strength
+                Text("Minimum Signal Strength: ${minSignal} dBm")
+                androidx.compose.material3.Slider(
+                    value = minSignal.toFloat(),
+                    onValueChange = { minSignal = it.toInt() },
+                    valueRange = -100f..-30f,
+                    steps = 14
+                )
+                
+                // Channel selector
+                Text("Channel:")
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(availableChannels) { channel ->
+                        FilterChip(
+                            selected = channel == selectedChannel,
+                            onClick = { selectedChannel = channel },
+                            label = { Text(channel?.toString() ?: "All") }
+                        )
+                    }
+                }
+                
+                // Saved networks only
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = savedOnly,
+                        onCheckedChange = { savedOnly = it }
+                    )
+                    Text("Show saved networks only")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { 
+                    onApply(minSignal, selectedChannel, savedOnly)
+                }
+            ) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

@@ -31,8 +31,16 @@ class WifiScanner {
     private val _allAPsFlow = MutableStateFlow<List<AP>>(emptyList())
     val allAPs: StateFlow<List<AP>> = _allAPsFlow.asStateFlow()
     
+    // Add filtered APs flow
+    private val _filteredAPsFlow = MutableStateFlow<List<AP>>(emptyList())
+    val filteredAPs: StateFlow<List<AP>> = _filteredAPsFlow.asStateFlow()
+    
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning
+    
+    // Add scanning status message
+    private val _statusMessage = MutableStateFlow("Ready to scan")
+    val statusMessage: StateFlow<String> = _statusMessage
     
     private var scanJob: Job? = null
     private var refreshJob: Job? = null
@@ -44,13 +52,16 @@ class WifiScanner {
     private var wifiInterface = "wlan0"
     private val possibleInterfaces = listOf("wlan0", "wlan1", "wlp2s0", "eth0", "rmnet0")
     
+    // Filter options
+    private var minSignalStrength = -90
+    private var channelFilter: Int? = null
+    private var onlyShowSavedNetworks = false
+    
     init {
         // Add the predefined AP to saved list
         addDefaultSavedAP()
         
-        // Add mock APs for testing when we can't properly scan
-        addMockAPs()
-        
+        // Initialize empty AP lists
         refreshAPLists()
     }
     
@@ -63,42 +74,76 @@ class WifiScanner {
         saveAP(defaultAP)
     }
     
-    // Add mock APs for UI testing when we can't actually scan
-    private fun addMockAPs() {
-        val mockAPs = listOf(
-            AP("Home Network", "00:11:22:33:44:55", 6, -45),
-            AP("Neighbor WiFi", "AA:BB:CC:DD:EE:FF", 11, -65),
-            AP("Cafe WiFi", "12:34:56:78:90:AB", 1, -72),
-            AP("Unknown Device", "FF:EE:DD:CC:BB:AA", 3, -80)
-        )
-        
-        for (ap in mockAPs) {
-            _discoveredAPs[ap.mac] = ap
-        }
-    }
-    
     fun saveAP(ap: AP) {
         if (!_savedAPs.any { it.mac == ap.mac }) {
             _savedAPs.add(ap)
             refreshAPLists()
-            Log.d(TAG, "AP saved: ${ap.essid} (${ap.mac})")
         }
     }
     
     fun removeSavedAP(mac: String) {
         _savedAPs.removeIf { it.mac == mac }
         refreshAPLists()
-        Log.d(TAG, "Saved AP removed: $mac")
+    }
+    
+    // New method to explicitly trigger a fresh scan
+    fun forceRefreshScan() {
+        // Clear the discovered APs to start fresh
+        _discoveredAPs.clear()
+        _statusMessage.value = "Scanning networks..."
+        
+        CoroutineScope(Dispatchers.IO).launch {
+            // First stop any ongoing scan
+            if (_isScanning.value) {
+                stopScanning()
+                delay(500) // Wait for scanning to stop
+            }
+            
+            // Start a new scan
+            startScanning()
+        }
+    }
+    
+    // Set filter options
+    fun setFilterOptions(minSignal: Int = -90, channel: Int? = null, onlySavedNetworks: Boolean = false) {
+        minSignalStrength = minSignal
+        channelFilter = channel
+        onlyShowSavedNetworks = onlySavedNetworks
+        
+        // Apply the filter to the current data
+        applyFilters()
+    }
+    
+    // Apply current filters to the AP list
+    private fun applyFilters() {
+        val allAPs = if (onlyShowSavedNetworks) {
+            _savedAPs.toList()
+        } else {
+            _allAPsFlow.value
+        }
+        
+        // Apply filtering criteria
+        val filtered = allAPs.filter { ap ->
+            val passesSignal = ap.pwr >= minSignalStrength
+            val passesChannel = channelFilter?.let { ap.ch == it } ?: true
+            
+            passesSignal && passesChannel
+        }
+        
+        // Make sure the filtered list has no duplicates (should be redundant, but just to be safe)
+        val uniqueFiltered = filtered.distinctBy { it.mac }
+        
+        _filteredAPsFlow.value = uniqueFiltered
     }
     
     fun startScanning(intervalMs: Long = scanInterval) {
         if (_isScanning.value) {
-            Log.d(TAG, "Scanner already running")
             return
         }
         
         scanInterval = intervalMs
         _isScanning.value = true
+        _statusMessage.value = "Scanning for networks..."
         
         // Find the WiFi interface name (might not be wlan0 on all devices)
         findWifiInterface()
@@ -118,23 +163,17 @@ class WifiScanner {
                 delay(1000)
             }
         }
-        
-        Log.d(TAG, "WiFi scanning started with interval $intervalMs ms")
     }
     
     private fun findWifiInterface() {
-        Log.d(TAG, "Searching for available WiFi interfaces")
-        
         // First check if our current interface exists and is usable
         shellExecutor.execute("ip addr show $wifiInterface") { output, exitCode ->
             if (exitCode == 0) {
                 // Check if interface is up
                 if (output.contains("state UP")) {
-                    Log.d(TAG, "Current interface $wifiInterface is up and usable")
                     ensureInterfaceIsUp(wifiInterface)
                     return@execute
                 } else {
-                    Log.d(TAG, "Current interface $wifiInterface exists but is down, bringing it up")
                     ensureInterfaceIsUp(wifiInterface)
                 }
             } else {
@@ -158,14 +197,12 @@ class WifiScanner {
                     val wlanInterface = foundInterfaces.find { it.startsWith("wlan") }
                     if (wlanInterface != null) {
                         wifiInterface = wlanInterface
-                        Log.d(TAG, "Found WiFi interface from iw dev: $wifiInterface")
                         ensureInterfaceIsUp(wifiInterface)
                         return@execute
                     }
                     
                     // If no wlan interface, use the first one found
                     wifiInterface = foundInterfaces.first()
-                    Log.d(TAG, "Using first available interface: $wifiInterface")
                     ensureInterfaceIsUp(wifiInterface)
                 } else {
                     // No interfaces found from iw dev, try checking each possible interface
@@ -179,8 +216,6 @@ class WifiScanner {
     }
     
     private fun tryPossibleInterfaces() {
-        Log.d(TAG, "Checking list of possible interfaces")
-        
         // Try each interface in our possible list
         var found = false
         
@@ -190,7 +225,6 @@ class WifiScanner {
             
             shellExecutor.execute("ip link show $iface") { output, exitCode ->
                 if (!found && exitCode == 0) {
-                    Log.d(TAG, "Found working interface: $iface")
                     wifiInterface = iface
                     found = true
                     ensureInterfaceIsUp(iface)
@@ -208,7 +242,6 @@ class WifiScanner {
                     val match = p2pRegex.find(output)
                     if (match != null) {
                         val p2pInterface = match.groupValues[1].trim()
-                        Log.d(TAG, "Found p2p interface: $p2pInterface")
                         wifiInterface = p2pInterface
                         ensureInterfaceIsUp(p2pInterface)
                     } else {
@@ -222,14 +255,9 @@ class WifiScanner {
     }
     
     private fun ensureInterfaceIsUp(iface: String) {
-        Log.d(TAG, "Ensuring interface $iface is up")
         shellExecutor.execute("ip link set $iface up") { output, exitCode ->
-            if (exitCode == 0) {
-                Log.d(TAG, "Successfully brought up interface $iface")
-            } else {
+            if (exitCode != 0) {
                 Log.e(TAG, "Failed to bring up interface $iface: $output")
-                // Even if we fail to bring it up, continue with the interface
-                // as it might work for some operations
             }
         }
     }
@@ -239,20 +267,18 @@ class WifiScanner {
         scanJob?.cancel()
         refreshJob?.cancel()
         
-        Log.d(TAG, "WiFi scanning stopped")
+        _statusMessage.value = "Scanning stopped"
     }
     
     // Fallback scan method - this is our primary scanning method now
     private fun runFallbackScan() {
-        Log.d(TAG, "Running WiFi scan using iw scan")
-        
         // Make sure the interface is up
         ensureInterfaceIsUp(wifiInterface)
         
         // Use iw scan to get available networks
         shellExecutor.execute("iw dev $wifiInterface scan") { output, exitCode ->
             if (exitCode == 0) {
-                Log.d(TAG, "WiFi scan successful")
+                _statusMessage.value = "Scan successful, parsing results..."
                 
                 // Process the output once at the end 
                 CoroutineScope(Dispatchers.Default).launch {
@@ -260,6 +286,7 @@ class WifiScanner {
                 }
             } else {
                 Log.e(TAG, "WiFi scan failed: $output")
+                _statusMessage.value = "Scan failed. Check permissions."
                 
                 // Try using ip neighbor to find devices on the network
                 tryIpNeighborScan()
@@ -272,26 +299,47 @@ class WifiScanner {
         // Split the output by BSS entries - each represents a WiFi network
         val bssEntries = output.split("BSS ").drop(1) // Drop the first empty element
         
-        Log.d(TAG, "Found ${bssEntries.size} WiFi networks in scan results")
-        
         if (bssEntries.isEmpty()) {
-            Log.d(TAG, "No networks found in scan results, using mock data")
-            updateMockAPSignals()
+            _statusMessage.value = ""
             return
         }
         
-        // Process each network
+        // Keep track of networks we've processed in this scan
+        val processedMacs = mutableSetOf<String>()
+        var parsedNetworks = 0
+        var newNetworks = 0
+        
         for (entry in bssEntries) {
             try {
                 // Extract MAC address from the start of the entry
                 val macRegex = Regex("([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})")
                 val macMatch = macRegex.find(entry)
-                val mac = macMatch?.value ?: continue
+                val rawMac = macMatch?.value ?: continue
                 
-                // Extract SSID
-                val ssidRegex = Regex("SSID: (.+)")
-                val ssidMatch = ssidRegex.find(entry)
-                val ssid = ssidMatch?.groupValues?.get(1)?.trim() ?: "Hidden Network"
+                // Normalize MAC to ensure consistent comparison
+                val mac = normalizeMac(rawMac)
+                
+                // Skip if we've already processed this MAC in this scan
+                if (mac in processedMacs) {
+                    continue
+                }
+                processedMacs.add(mac)
+                
+                // Extract SSID - Fixed to handle multiline parsing better
+                var ssid = "Unknown"
+                if (entry.contains("SSID:")) {
+                    val ssidLines = entry.lines().filter { it.contains("SSID:") }
+                    if (ssidLines.isNotEmpty()) {
+                        val ssidLine = ssidLines.first()
+                        val ssidMatch = Regex("SSID:\\s*(.+?)\\s*$").find(ssidLine)
+                        ssid = ssidMatch?.groupValues?.get(1)?.trim() ?: "Unknown"
+                        
+                        // Handle empty SSIDs as hidden networks
+                        if (ssid.isEmpty() || ssid.isBlank()) {
+                            ssid = "Hidden Network"
+                        }
+                    }
+                }
                 
                 // Extract channel
                 val channelRegex = Regex("DS Parameter set: channel (\\d+)")
@@ -305,21 +353,35 @@ class WifiScanner {
                 val signalStr = signalMatch?.groupValues?.get(1) ?: "-90.0"
                 val signal = signalStr.toFloatOrNull()?.toInt() ?: -90
                 
-                // Create AP object
+                // Create AP object with normalized MAC
                 val ap = AP(
                     essid = ssid,
-                    mac = mac,
+                    mac = mac, // Use normalized MAC
                     ch = channel,
                     pwr = signal
                 )
                 
+                // Get the count of networks before adding this one
+                val networkCountBefore = _discoveredAPs.size
+                
                 // Add or update the AP in our discovered list
                 updateDiscoveredAP(ap)
+                parsedNetworks++
                 
-                Log.d(TAG, "Parsed WiFi network: $ssid ($mac) on channel $channel with signal $signal dBm")
+                // Check if this was a new network
+                if (_discoveredAPs.size > networkCountBefore) {
+                    newNetworks++
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing network entry: ${e.message}")
             }
+        }
+        
+        // Update status message to mention new networks if any were found
+        if (newNetworks > 0) {
+            _statusMessage.value = "Found $newNetworks new networks"
+        } else {
+            _statusMessage.value = "Scan complete, found $parsedNetworks networks"
         }
         
         // Immediately refresh AP lists to update UI
@@ -327,16 +389,12 @@ class WifiScanner {
     }
     
     private fun tryIpNeighborScan() {
-        Log.d(TAG, "Trying ip neighbor scan as last resort")
-        
         shellExecutor.execute("ip neighbor") { output, exitCode ->
             if (exitCode == 0 && output.isNotEmpty()) {
-                Log.d(TAG, "Found network neighbors, extracting device information")
                 parseIpNeighborOutput(output)
             } else {
-                Log.e(TAG, "IP neighbor scan failed, using mock AP data")
-                // Last resort: Generate random signal strength updates for mock APs
-                updateMockAPSignals()
+                Log.e(TAG, "IP neighbor scan failed")
+                _statusMessage.value = "No networks found."
             }
         }
     }
@@ -373,27 +431,10 @@ class WifiScanner {
         }
         
         if (!foundDevices) {
-            // If we didn't find any devices, fall back to mock data
-            updateMockAPSignals()
-        }
-        
-        // Immediately refresh AP lists
-        refreshAPLists()
-    }
-    
-    // Update mock APs with random signal strengths when all else fails
-    private fun updateMockAPSignals() {
-        Log.d(TAG, "Updating mock AP signals")
-        for (ap in _discoveredAPs.values) {
-            // Randomly fluctuate signal strength to simulate scanning
-            val randomChange = (-5..5).random()
-            val newPwr = (ap.pwr + randomChange).coerceIn(-95, -30)
-            ap.update(ap.essid, ap.ch, newPwr)
-        }
-        
-        // Ensure we have at least some mock APs if there are none
-        if (_discoveredAPs.isEmpty()) {
-            addMockAPs()
+            // If we didn't find any devices
+            _statusMessage.value = "No devices found on network"
+        } else {
+            _statusMessage.value = "Found ${_discoveredAPs.size} devices on network"
         }
         
         // Immediately refresh AP lists
@@ -401,45 +442,91 @@ class WifiScanner {
     }
     
     private fun updateDiscoveredAP(ap: AP) {
-        val existingAP = _discoveredAPs[ap.mac]
+        // Use normalized MAC for lookup
+        val normalizedMac = normalizeMac(ap.mac)
+        
+        // Check if we already have this AP
+        val existingAP = _discoveredAPs.entries.find { normalizeMac(it.key) == normalizedMac }?.value
+        
         if (existingAP != null) {
-            // Update existing AP with new information if needed
+            // Update existing AP with new information if needed - silently
             existingAP.update(
                 essid = if (ap.essid != "Unknown" && ap.essid != "Hidden Network") ap.essid else existingAP.essid,
                 ch = if (ap.ch > 0) ap.ch else existingAP.ch,
                 pwr = ap.pwr
             )
-            Log.d(TAG, "Updated existing AP: ${existingAP.essid} (${existingAP.mac})")
+            // No logging for updates to existing APs
         } else {
-            // Add new AP
-            _discoveredAPs[ap.mac] = ap
-            Log.d(TAG, "Added new AP: ${ap.essid} (${ap.mac})")
+            // Add new AP and log only for new discoveries
+            _discoveredAPs[normalizedMac] = ap
+            Log.d(TAG, "⭐ NEW NETWORK DISCOVERED: ${ap.essid ?: "Unknown"} (${normalizedMac}) on channel ${ap.ch} with signal ${ap.pwr} dBm")
+            
+            // Update the status message to show the new network
+            _statusMessage.value = "New network found: ${ap.essid ?: "Unknown"}"
         }
     }
     
     private fun refreshAPLists() {
+        // Normalize all MAC addresses in the _discoveredAPs map to ensure no duplicates
+        val normalizedDiscoveredAPs = mutableMapOf<String, AP>()
+        _discoveredAPs.forEach { (mac, ap) ->
+            val normalizedMac = normalizeMac(mac)
+            // If there's a collision, keep the stronger signal
+            val existingAP = normalizedDiscoveredAPs[normalizedMac]
+            if (existingAP == null || existingAP.pwr < ap.pwr) {
+                normalizedDiscoveredAPs[normalizedMac] = ap
+            }
+        }
+        
+        // Replace the discoveredAPs with the normalized version
+        _discoveredAPs.clear()
+        _discoveredAPs.putAll(normalizedDiscoveredAPs)
+        
         // Sort discovered APs by signal strength
         val sortedDiscovered = _discoveredAPs.values.toList()
             .sortedByDescending { it.pwr }
         
-        // Filter out stale APs (older than 60 seconds) in a real implementation
+        // Ensure saved APs list has no duplicates (by normalized MAC address)
+        val uniqueSavedAPs = _savedAPs
+            .groupBy { normalizeMac(it.mac) }
+            .mapValues { it.value.first() } // Take the first AP from each group
+            .values.toList()
         
+        // Update saved APs flow with the unique list
+        _savedAPsFlow.value = uniqueSavedAPs
+        
+        // Update scanned APs flow
         _scannedAPsFlow.value = sortedDiscovered
-        _savedAPsFlow.value = _savedAPs.toList()
         
-        // Combine both lists for all APs, putting saved ones first
-        val combinedList = mutableListOf<AP>()
-        combinedList.addAll(_savedAPs)
+        // Create a combined list without duplicates
+        val combinedMap = mutableMapOf<String, AP>()
         
-        // Add discovered APs that aren't already saved
-        for (ap in sortedDiscovered) {
-            if (!_savedAPs.any { it.mac == ap.mac }) {
-                combinedList.add(ap)
+        // First add all saved APs to the map (they take priority)
+        uniqueSavedAPs.forEach { ap ->
+            combinedMap[normalizeMac(ap.mac)] = ap
+        }
+        
+        // Then add discovered APs that aren't already in the map
+        sortedDiscovered.forEach { ap ->
+            val normalizedMac = normalizeMac(ap.mac)
+            if (!combinedMap.containsKey(normalizedMac)) {
+                combinedMap[normalizedMac] = ap
             }
         }
         
-        Log.d(TAG, "Updated AP lists: ${combinedList.size} total APs (${_savedAPs.size} saved, ${sortedDiscovered.size} discovered)")
+        // Convert the map values to a list, ensuring no duplicates
+        val combinedList = combinedMap.values.toList()
+        
+        // Update the all APs flow
         _allAPsFlow.value = combinedList
+        
+        // Apply filters to the updated list
+        applyFilters()
+    }
+    
+    // Helper function to normalize MAC addresses for consistent comparison
+    private fun normalizeMac(mac: String): String {
+        return mac.lowercase().trim().replace("-", ":")
     }
     
     companion object {

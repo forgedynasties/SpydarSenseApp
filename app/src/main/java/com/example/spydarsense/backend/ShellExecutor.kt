@@ -39,7 +39,7 @@ class ShellExecutor {
                 try {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
-                        Log.d("ShellExecutor", "[$commandType] Output: $line")
+                        //Log.d("ShellExecutor", "[$commandType] Output: $line")
                         outputBuffer.append(line).append("\n")
                         callback(line, 0) // Stream output line by line
                         line = reader.readLine()
@@ -94,8 +94,7 @@ class ShellExecutor {
         process?.destroy()
         
         // Log that we're stopping the process
-        Log.d("ShellExecutor", "Stopping process for command: $currentCommand")
-        
+
         outputThread?.interrupt()
         errorThread?.interrupt()
         try {
@@ -104,7 +103,6 @@ class ShellExecutor {
         } catch (e: InterruptedException) {
             Log.e("ShellExecutor", "Interrupted while joining threads: ${e.message}")
         }
-        Log.d("ShellExecutor", "Process stopped for command: $currentCommand")
         currentCommand = "" // Clear the command reference
     }
 }

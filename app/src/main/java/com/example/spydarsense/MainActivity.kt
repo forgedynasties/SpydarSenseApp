@@ -64,6 +64,7 @@ import androidx.core.content.ContextCompat
 import com.example.spydarsense.components.ThemeToggle
 import com.example.spydarsense.data.AP
 import com.example.spydarsense.ui.theme.rememberThemeState
+import com.example.spydarsense.components.*
 
 class MainActivity : ComponentActivity() {
 
@@ -134,21 +135,7 @@ fun HomeScreen(navController: NavController) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Spydar Sense",
-                        fontWeight = FontWeight.Medium
-                    ) 
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    ThemeToggle()
-                }
-            )
+            AppTopBar(title = "Spydar Sense")
         },
         floatingActionButton = {
             FloatingActionButton(
@@ -177,17 +164,8 @@ fun HomeScreen(navController: NavController) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Summary card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 16.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                    ),
-                    elevation = CardDefaults.cardElevation(
-                        defaultElevation = 0.dp
-                    )
+                AppCard(
+                    modifier = Modifier.padding(vertical = 16.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -264,26 +242,12 @@ fun HomeScreen(navController: NavController) {
 
 @Composable
 fun APCard(ap: AP, navController: NavController) {
-    // Calculate signal strength indicator (0-4) but we won't display the circle
-    val signalStrength = when {
-        ap.pwr >= -55 -> 4
-        ap.pwr >= -65 -> 3
-        ap.pwr >= -75 -> 2
-        ap.pwr >= -85 -> 1
-        else -> 0
-    }
-
-    Card(
+    AppCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
                 navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/${ap.pwr}/${ap.ch}")
-            },
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 2.dp,
-            pressedElevation = 0.dp
-        )
+            }
     ) {
         Row(
             modifier = Modifier

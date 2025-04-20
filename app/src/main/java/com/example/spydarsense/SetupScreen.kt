@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +18,12 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.spydarsense.backend.ShellExecutor
-import com.example.spydarsense.components.ThemeToggle
+import com.example.spydarsense.components.AppButton
+import com.example.spydarsense.components.AppOutlinedButton
+import com.example.spydarsense.components.AppProgressIndicator
+import com.example.spydarsense.components.AppTopBar
+import com.example.spydarsense.components.CollapsibleSection
+import com.example.spydarsense.components.LoadingIndicator
 import com.example.spydarsense.ui.theme.SpydarSenseTheme
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -40,6 +43,9 @@ fun SetupScreen(navController: NavController) {
     val allCommandsCompleted = remember(completedCommands) { 
         completedCommands.isNotEmpty() && completedCommands.all { it } 
     }
+    
+    // Track if auto-setup is running
+    var isAutoSetupRunning by remember { mutableStateOf(false) }
 
     // Initialize completedCommands with the correct size and all false
     LaunchedEffect(commands) {
@@ -48,7 +54,7 @@ fun SetupScreen(navController: NavController) {
     }
 
     val shellExecutor = remember { ShellExecutor() }
-    // Initialize progress to 0f instead of relying on default value
+    // Initialize progress to 0f explicitly
     val progressAnimation = remember { Animatable(0f) }
     
     // Update progress animation whenever completedCommands changes
@@ -62,23 +68,44 @@ fun SetupScreen(navController: NavController) {
         )
     }
 
+    // Function to execute a command and update its status
+    val executeCommand = { index: Int, command: Command ->
+        if (index < completedCommands.size && !completedCommands[index]) {
+            shellExecutor.execute(command.command) { output, exitCode ->
+                if (exitCode == 0) {
+                    if (output.contains(command.expectedOutput) || command.expectedOutput.isEmpty()) {
+                        completedCommands[index] = true
+                    }
+                }
+            }
+        }
+    }
+
+    // Coroutine scope for running commands
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Function to execute all commands in sequence
+    val executeAllCommands: () -> Unit = {
+        isAutoSetupRunning = true
+        coroutineScope.launch {
+            commands.forEachIndexed { index, command ->
+                try {
+                    val output = executeCommand(command.command, shellExecutor)
+                    if (output.contains(command.expectedOutput) || command.expectedOutput.isEmpty()) {
+                        completedCommands[index] = true
+                    }
+                } catch (e: Exception) {
+                    Log.e("SetupScreen", "Error executing command ${command.description}: ${e.message}")
+                }
+            }
+            isAutoSetupRunning = false
+        }
+        // No need to return anything - the explicit type declaration handles it
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Initial Setup", 
-                        fontWeight = FontWeight.Medium
-                    ) 
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    ThemeToggle()
-                }
-            )
+            AppTopBar(title = "Initial Setup")
         }
     ) { innerPadding ->
         Column(
@@ -89,23 +116,8 @@ fun SetupScreen(navController: NavController) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Progress indicator
-            LinearProgressIndicator(
-                progress = { progressAnimation.value },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp)
-                    .height(8.dp),
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                color = MaterialTheme.colorScheme.primary
-            )
-            
-            Text(
-                text = "Complete these steps to set up Spydar Sense",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+
+
 
             if (commands.isNotEmpty()) {
                 LazyColumn(
@@ -117,6 +129,7 @@ fun SetupScreen(navController: NavController) {
                         CommandItem(
                             command = command,
                             isCompleted = completedCommands.getOrNull(commands.indexOf(command)) ?: false,
+                            isExecuting = isAutoSetupRunning && !completedCommands[commands.indexOf(command)],
                             onExecute = { output ->
                                 if (output == command.expectedOutput || command.expectedOutput.isEmpty()) {
                                     completedCommands[commands.indexOf(command)] = true
@@ -142,32 +155,14 @@ fun SetupScreen(navController: NavController) {
             }
             
             // Next button
-            Button(
-                onClick = {
-                    navController.navigate("home")
-                },
+            AppButton(
+                text = "Continue",
+                onClick = { navController.navigate("home") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 16.dp)
-                    .height(56.dp),
-                enabled = true,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                ),
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = 4.dp,
-                    pressedElevation = 0.dp
-                )
-            ) {
-                Text(
-                    "Continue to Home",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
+                    .height(56.dp)
+            )
         }
     }
 }
@@ -177,11 +172,15 @@ fun SetupScreen(navController: NavController) {
 fun CommandItem(
     command: Command,
     isCompleted: Boolean,
+    isExecuting: Boolean = false, // Add parameter to indicate if this command is being auto-executed
     onExecute: (String) -> Unit,
     shellExecutor: ShellExecutor
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var isExecuting by remember { mutableStateOf(false) }
+    var isManuallyExecuting by remember { mutableStateOf(false) }
+    
+    // The command is executing if either it's being auto-executed or manually executed
+    val isCurrentlyExecuting = isExecuting || isManuallyExecuting
     
     ElevatedCard(
         modifier = Modifier
@@ -216,7 +215,7 @@ fun CommandItem(
                         fontSize = 22.sp,
                         modifier = Modifier.padding(4.dp)
                     )
-                    isExecuting -> CircularProgressIndicator(
+                    isCurrentlyExecuting -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.primary
@@ -255,9 +254,10 @@ fun CommandItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (!isCompleted) {
-                    OutlinedButton(
+                    AppOutlinedButton(
+                        text = "Execute",
                         onClick = {
-                            isExecuting = true
+                            isManuallyExecuting = true
                             coroutineScope.launch {
                                 try {
                                     val output = executeCommand(command.command, shellExecutor)
@@ -265,17 +265,13 @@ fun CommandItem(
                                 } catch (e: Exception) {
                                     Log.e("CommandItem", "Command execution failed: ${e.message}")
                                 } finally {
-                                    isExecuting = false
+                                    isManuallyExecuting = false
                                 }
                             }
                         },
-                        enabled = !isExecuting,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp)
-                    ) {
-                        Text("Execute")
-                    }
+                        enabled = !isCurrentlyExecuting,
+                        modifier = Modifier.height(40.dp)
+                    )
                 } else {
                     Text(
                         "✓ Completed",
@@ -291,8 +287,8 @@ fun CommandItem(
 
 // Simulate command execution
 suspend fun executeCommand(command: String, shellExecutor: ShellExecutor): String {
-    return suspendCancellableCoroutine { continuation ->
-        shellExecutor.execute(command) { output, exitCode ->
+    return suspendCancellableCoroutine { continuation -> 
+        shellExecutor.execute(command) { output, exitCode -> 
             // Log the output and exit code
             Log.d("executeCommand", "Command: $command, Output: $output, Exit Code: $exitCode")
 

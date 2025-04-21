@@ -55,16 +55,22 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.spydarsense.components.ThemeToggle
 import com.example.spydarsense.data.AP
+import com.example.spydarsense.data.Station
+import com.example.spydarsense.repository.WifiScanRepository
 import com.example.spydarsense.ui.theme.rememberThemeState
 import com.example.spydarsense.components.*
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -86,11 +92,21 @@ class MainActivity : ComponentActivity() {
         ) {
             requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
+
+        // Request WRITE_EXTERNAL_STORAGE permission as well for airodump output
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+
         enableEdgeToEdge()
 
         setContent {
             val isDarkTheme = rememberThemeState()
-            
+
             SpydarSenseTheme(darkTheme = isDarkTheme.value) {
                 val navController = rememberNavController()
                 val setup = true // Set to true to show the setup screen
@@ -113,25 +129,35 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Stop scanning when the app is destroyed
+        WifiScanRepository.getInstance().stopScan()
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(navController: NavController) {
-    // Sample list of scanned access points (APs)
-    val allScannedAPs = listOf(
-        AP("Access Point 1", "AC:6C:90:22:8F:37", "WPA2", "CCMP", "PSK", -50, 100, 50, 0, 1),
-        AP("Access Point 1", "AC:6C:90:22:8F:37", "WPA2", "CCMP", "PSK", -50, 100, 50, 0, 6),
+    // Get the repository instance
+    val repository = WifiScanRepository.getInstance()
 
+    // Collect the APs from the repository with proper initialization
+    val allScannedAPs = repository.allAccessPoints.collectAsState(initial = emptyList()).value
+    val isScanning = repository.isScanning.collectAsState(initial = false).value
+    val isRefreshing = repository.isRefreshing.collectAsState(initial = false).value
 
-        )
-    
     // State to track the number of APs to display
-    val displayedAPsCount = remember { mutableStateOf(3) }
-    var isRefreshing by remember { mutableStateOf(false) }
-    
+    val displayedAPsCount = remember { mutableStateOf(5) }
+
     // Calculate if we're showing all APs
     val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
+
+    // Start scanning when the HomeScreen is shown
+    LaunchedEffect(true) {
+        repository.startScan()
+    }
 
     Scaffold(
         topBar = {
@@ -139,7 +165,12 @@ fun HomeScreen(navController: NavController) {
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { /* Scan for new APs */ },
+                onClick = {
+                    // Manually trigger a refresh
+                    if (!isRefreshing) {
+                        repository.forceRefreshScan()
+                    }
+                },
                 shape = CircleShape,
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -187,7 +218,16 @@ fun HomeScreen(navController: NavController) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
-                        
+
+                        // Show scanning indicator
+                        if (isRefreshing) {
+                            Text(
+                                "Scanning...",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
                         OutlinedButton(
                             onClick = { /* Filter options */ },
                             shape = RoundedCornerShape(8.dp)
@@ -196,7 +236,7 @@ fun HomeScreen(navController: NavController) {
                         }
                     }
                 }
-                
+
                 // AP list title
                 Row(
                     modifier = Modifier
@@ -211,11 +251,11 @@ fun HomeScreen(navController: NavController) {
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onBackground
                     )
-                    
+
                     TextButton(
-                        onClick = { 
+                        onClick = {
                             if (isShowingAll) {
-                                displayedAPsCount.value = 3  // Reset to initial count
+                                displayedAPsCount.value = 5  // Reset to initial count
                             } else {
                                 displayedAPsCount.value = allScannedAPs.size  // Show all
                             }
@@ -225,14 +265,35 @@ fun HomeScreen(navController: NavController) {
                     }
                 }
 
-                // AP list
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp)
-                ) {
-                    items(allScannedAPs.take(displayedAPsCount.value)) { ap ->
-                        APCard(ap, navController)
+                // AP list with empty state
+                if (allScannedAPs.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Text("No networks found")
+                            OutlinedButton(
+                                onClick = { repository.forceRefreshScan() }
+                            ) {
+                                Text("Refresh Scan")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(allScannedAPs.take(displayedAPsCount.value)) { ap ->
+                            APCard(ap, navController)
+                        }
                     }
                 }
             }
@@ -288,7 +349,7 @@ fun APCard(ap: AP, navController: NavController) {
                     )
                 }
             }
-            
+
             // Arrow indicator
             Icon(
                 imageVector = Icons.Default.KeyboardArrowRight,

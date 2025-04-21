@@ -5,36 +5,22 @@ import com.example.spydarsense.data.AP
 import com.example.spydarsense.data.Station
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.combine
 
 class WifiScanRepository private constructor() {
     
     private val airodumpScanner = AirodumpScanner.getInstance()
     
-    // Hard-coded APs that should always show
-    private val _hardcodedAPs = MutableStateFlow<List<AP>>(
-        listOf(
-            AP(essid = "Demo Network 1", mac = "00:11:22:33:44:55", ch = 1, pwr = -50),
-            AP(essid = "Demo Network 2", mac = "AA:BB:CC:DD:EE:FF", ch = 6, pwr = -65)
-        )
-    )
-    
-    // Combine hardcoded and scanned APs
-    val allAccessPoints = combine(
-        _hardcodedAPs,
-        airodumpScanner.accessPoints
-    ) { hardcoded, scanned ->
-        // Combine and deduplicate (in case a scanned AP has the same MAC as a hardcoded one)
-        val combined = hardcoded.toMutableList()
-        combined.addAll(scanned)
-        combined.distinctBy { AP.normalizeMac(it.mac) }
-    }
+    // Simply pass through the scanner's access points instead of combining with hardcoded ones
+    val allAccessPoints = airodumpScanner.accessPoints
     
     val stations = airodumpScanner.stations
     
     val isScanning = airodumpScanner.isScanning
     val isRefreshing = airodumpScanner.isRefreshing
+    
+    // Add a state flow to track if scanning is active
+    private val _scanActive = MutableStateFlow(false)
+    val scanActive: StateFlow<Boolean> = _scanActive
     
     companion object {
         private var instance: WifiScanRepository? = null
@@ -48,14 +34,25 @@ class WifiScanRepository private constructor() {
     }
     
     fun startScan() {
-        airodumpScanner.startScan()
+        if (!_scanActive.value) {
+            airodumpScanner.startScan()
+            _scanActive.value = true
+        }
     }
     
     fun stopScan() {
-        airodumpScanner.stopScan()
+        if (_scanActive.value) {
+            airodumpScanner.stopScan()
+            _scanActive.value = false
+        }
     }
     
     fun forceRefreshScan() {
-        airodumpScanner.forceRefresh()
+        if (_scanActive.value) {
+            airodumpScanner.forceRefresh()
+        } else {
+            // Start scan if not already scanning
+            startScan()
+        }
     }
 }

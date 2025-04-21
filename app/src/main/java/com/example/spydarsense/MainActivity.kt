@@ -55,10 +55,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -111,6 +113,22 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val setup = true // Set to true to show the setup screen
 
+                // Track current screen for lifecycle management
+                var currentScreen by remember { mutableStateOf("") }
+                
+                // Listen for navigation changes to update current screen
+                LaunchedEffect(navController) {
+                    navController.currentBackStackEntryFlow.collect { entry ->
+                        val previousScreen = currentScreen
+                        currentScreen = entry.destination.route ?: ""
+                        
+                        // Stop scanning when leaving the home screen
+                        if (previousScreen == "home" && currentScreen != "home") {
+                            WifiScanRepository.getInstance().stopScan()
+                        }
+                    }
+                }
+
                 NavHost(navController = navController, startDestination = if (setup) "setup" else "home") {
                     composable("setup") {
                         SetupScreen(navController)
@@ -118,12 +136,14 @@ class MainActivity : ComponentActivity() {
                     composable("home") {
                         HomeScreen(navController)
                     }
-                    composable("detectSpyCam/{essid}/{mac}/{pwr}/{ch}") { backStackEntry ->
-                        val essid = backStackEntry.arguments?.getString("essid") ?: ""
-                        val mac = backStackEntry.arguments?.getString("mac") ?: ""
+                    // Updated route to include sessionId for isolation
+                    composable("detectSpyCam/{sessionId}/{stationMac}/{apMac}/{pwr}/{ch}") { backStackEntry ->
+                        val sessionId = backStackEntry.arguments?.getString("sessionId") ?: "${System.currentTimeMillis()}"
+                        val stationMac = backStackEntry.arguments?.getString("stationMac") ?: ""
+                        val apMac = backStackEntry.arguments?.getString("apMac") ?: ""
                         val pwr = backStackEntry.arguments?.getString("pwr")?.toIntOrNull() ?: 0
                         val ch = backStackEntry.arguments?.getString("ch")?.toIntOrNull() ?: 0
-                        DetectSpyCamScreen(essid, mac, pwr, ch)
+                        DetectSpyCamScreen(sessionId = sessionId, stationMac = stationMac, apMac = apMac, pwr = pwr, ch = ch)
                     }
                 }
             }
@@ -145,6 +165,7 @@ fun HomeScreen(navController: NavController) {
 
     // Collect the APs from the repository with proper initialization
     val allScannedAPs = repository.allAccessPoints.collectAsState(initial = emptyList()).value
+    val stations = repository.stations.collectAsState(initial = emptyList()).value
     val isScanning = repository.isScanning.collectAsState(initial = false).value
     val isRefreshing = repository.isRefreshing.collectAsState(initial = false).value
 
@@ -154,10 +175,34 @@ fun HomeScreen(navController: NavController) {
     // Calculate if we're showing all APs
     val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
 
-    // Start scanning when the HomeScreen is shown
-    LaunchedEffect(true) {
+    // Start and stop scanning based on this composable's lifecycle
+    DisposableEffect(true) {
+        // Start scanning when the HomeScreen becomes active
         repository.startScan()
+        
+        // Stop scanning when the HomeScreen is no longer active
+        onDispose {
+            repository.stopScan()
+        }
     }
+
+    // Create a map of MAC to AP for quick lookup of AP details
+    val apMap = remember(allScannedAPs) {
+        allScannedAPs.associateBy { AP.normalizeMac(it.mac) }
+    }
+
+    // Filter stations to only include those associated with an AP
+    val associatedStations = remember(stations, apMap) {
+        stations.filter { station -> 
+            station.bssid != "(not associated)" && 
+            apMap.containsKey(AP.normalizeMac(station.bssid))
+        }
+    }
+
+    // State for tracking which dropdown is expanded
+    val savedDevicesExpanded = remember { mutableStateOf(false) }
+    val scannedDevicesExpanded = remember { mutableStateOf(true) } // Default open
+    val accessPointsExpanded = remember { mutableStateOf(true) } // Default open
 
     Scaffold(
         topBar = {
@@ -237,62 +282,92 @@ fun HomeScreen(navController: NavController) {
                     }
                 }
 
-                // AP list title
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Dropdown lists section
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    Text(
-                        text = "Available Networks",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-
-                    TextButton(
-                        onClick = {
-                            if (isShowingAll) {
-                                displayedAPsCount.value = 5  // Reset to initial count
-                            } else {
-                                displayedAPsCount.value = allScannedAPs.size  // Show all
-                            }
-                        }
-                    ) {
-                        Text(if (isShowingAll) "Show Less" else "Show All")
-                    }
-                }
-
-                // AP list with empty state
-                if (allScannedAPs.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                    // Saved Devices Section
+                    
+                    
+                    // Scanned Devices (Stations) Section
+                    item {
+                        ExpandableSection(
+                            title = "Scanned Devices",
+                            expanded = scannedDevicesExpanded.value,
+                            onToggle = { scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
+                            count = associatedStations.size
                         ) {
-                            Text("No networks found")
-                            OutlinedButton(
-                                onClick = { repository.forceRefreshScan() }
-                            ) {
-                                Text("Refresh Scan")
+                            if (associatedStations.isEmpty()) {
+                                Text(
+                                    "No devices detected",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    associatedStations.forEach { station ->
+                                        val associatedAP = apMap[AP.normalizeMac(station.bssid)]
+                                        StationCard(
+                                            station = station,
+                                            apEssid = associatedAP?.essid ?: "Unknown",
+                                            apChannel = associatedAP?.ch ?: 0,
+                                            navController = navController  // Pass navController here
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = PaddingValues(bottom = 16.dp)
-                    ) {
-                        items(allScannedAPs.take(displayedAPsCount.value)) { ap ->
-                            APCard(ap, navController)
+                    
+                    // Access Points Section
+                    item {
+                        ExpandableSection(
+                            title = "Access Points",
+                            expanded = accessPointsExpanded.value,
+                            onToggle = { accessPointsExpanded.value = !accessPointsExpanded.value },
+                            count = allScannedAPs.size
+                        ) {
+                            if (allScannedAPs.isEmpty()) {
+                                Text(
+                                    "No networks found",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    allScannedAPs.take(displayedAPsCount.value).forEach { ap ->
+                                        APCard(ap, navController)
+                                    }
+                                    
+                                    if (allScannedAPs.size > displayedAPsCount.value) {
+                                        TextButton(
+                                            onClick = {
+                                                displayedAPsCount.value = allScannedAPs.size  // Show all
+                                            },
+                                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                                        ) {
+                                            Text("Show All")
+                                        }
+                                    } else if (displayedAPsCount.value > 5) {
+                                        TextButton(
+                                            onClick = {
+                                                displayedAPsCount.value = 5  // Reset to initial count
+                                            },
+                                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                                        ) {
+                                            Text("Show Less")
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -302,13 +377,129 @@ fun HomeScreen(navController: NavController) {
 }
 
 @Composable
-fun APCard(ap: AP, navController: NavController) {
+fun ExpandableSection(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    count: Int,
+    content: @Composable () -> Unit
+) {
     AppCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // Header section with toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle() }
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$title ($count)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowRight,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    modifier = Modifier.rotate(if (expanded) 90f else 0f),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            
+            // Content section
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    content()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StationCard(station: Station, apEssid: String, apChannel: Int, navController: NavController) {
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/${ap.pwr}/${ap.ch}")
+                // Generate a unique session ID for this detection session
+                val sessionId = "${System.currentTimeMillis()}-${station.mac}"
+                // Navigate to spy cam detector with station info
+                navController.navigate("detectSpyCam/$sessionId/${station.mac}/${station.bssid}/${station.power}/${apChannel}")
+            },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Device details
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+            ) {
+                Text(
+                    text = station.mac,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                
+                Text(
+                    text = "AP: ${if (apEssid != "null") apEssid else station.bssid}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "CH $apChannel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "${station.power} dBm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
             }
+
+            // Arrow indicator
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = "Open",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+fun APCard(ap: AP, navController: NavController) {
+    // Remove clickable modifier and navigation logic since APs shouldn't support detection
+    AppCard(
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier

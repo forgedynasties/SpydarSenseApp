@@ -25,6 +25,7 @@ class ShellExecutor {
                 command.contains("tcpdump") -> "TCPDUMP"
                 command.contains("nexutil") -> "NEXUTIL"
                 command.contains("makecsiparams") -> "CSI_PARAMS"
+                command.contains("airodump-ng") -> "AIRODUMP"
                 else -> "SHELL"
             }
             
@@ -39,7 +40,10 @@ class ShellExecutor {
                 try {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
-                        Log.d("ShellExecutor", "[$commandType] Output: $line")
+                        /*if (commandType != "AIRODUMP") {
+                            Log.d("ShellExecutor", "[$commandType] Output: $line")
+
+                        }*/
                         outputBuffer.append(line).append("\n")
                         callback(line, 0) // Stream output line by line
                         line = reader.readLine()

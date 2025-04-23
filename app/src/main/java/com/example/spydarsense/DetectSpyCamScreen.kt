@@ -41,7 +41,7 @@ import kotlin.math.min
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr: Int, ch: Int) {
-    val detector = remember { SpyCameraDetector.getInstance() }
+    val detector = remember { SpyCameraDetector.getInstance(stationMac) }
     var isCollecting by remember { mutableStateOf(false) }
     var showExtraStats by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()

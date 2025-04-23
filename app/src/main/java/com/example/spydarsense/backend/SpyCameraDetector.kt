@@ -15,12 +15,11 @@ import com.example.spydarsense.data.CSISample
  * SpyCameraDetector serves as the main driver class for backend operations.
  * It orchestrates all backend components and provides a clean interface for the UI.
  */
-class SpyCameraDetector private constructor() {
+class SpyCameraDetector private constructor(private val etherSrc: String) {
     private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     @SuppressLint("SdCardPath")
     private val outputDir = "/sdcard/Download/Lab"
     private val shellExecutor = ShellExecutor()
-    private val etherSrc = "AC:6C:90:22:8F:37" // Example MAC address, replace with actual
 
     private val tcpdumpManager = TcpdumpManager(outputDir, dateFormat, shellExecutor, etherSrc)
     private val csiCollector = CSIBitrateCollector(tcpdumpManager)
@@ -440,9 +439,9 @@ class SpyCameraDetector private constructor() {
         @Volatile
         private var instance: SpyCameraDetector? = null
 
-        fun getInstance(): SpyCameraDetector {
+        fun getInstance(etherSrc: String = "00:00:00:00:00:00"): SpyCameraDetector {
             return instance ?: synchronized(this) {
-                instance ?: SpyCameraDetector().also { instance = it }
+                instance ?: SpyCameraDetector(etherSrc).also { instance = it }
             }
         }
     }

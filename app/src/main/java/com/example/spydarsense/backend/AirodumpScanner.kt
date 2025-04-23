@@ -19,7 +19,7 @@ import java.util.Locale
 class AirodumpScanner {
     private val shellExecutor = ShellExecutor()
     private var airodumpJob: Job? = null
-    private var parserJob: Job? = null
+    private var fileMonitorJob: Job? = null
     
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning
@@ -36,6 +36,9 @@ class AirodumpScanner {
     private val outputDir = "/sdcard"
     private val outputFileName = "airodump_testfile"
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    
+    // Track the last modified time of CSV file for change detection
+    private var lastCsvModifiedTime = 0L
     
     companion object {
         private var instance: AirodumpScanner? = null
@@ -57,8 +60,9 @@ class AirodumpScanner {
         _isScanning.value = true
         _isRefreshing.value = true
         
-        // Start airodump-ng
-        val command = "LD_PRELOAD=libfakeioctl.so airodump-ng --write-interval 3 --band bg --output-format csv -w $outputDir/$outputFileName wlan0"
+        Log.d("AirodumpScanner", "Starting airodump-ng scan")
+
+        val command = "LD_PRELOAD=libfakeioctl.so airodump-ng --write-interval 1 --band bg --output-format csv -w $outputDir/$outputFileName wlan0"
         
         airodumpJob = CoroutineScope(Dispatchers.IO).launch {
             shellExecutor.execute(command) { output, exitCode -> 
@@ -69,12 +73,33 @@ class AirodumpScanner {
             }
         }
         
-        // Start parsing the CSV file periodically
-        parserJob = CoroutineScope(Dispatchers.IO).launch {
+        // Start file monitoring instead of periodic parsing
+        startFileMonitoring()
+    }
+    
+    private fun startFileMonitoring() {
+        // Reset the last modified time to ensure we check the file on first run
+        lastCsvModifiedTime = 0L
+        
+        fileMonitorJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive && _isScanning.value) {
-                parseCSV()
-                _isRefreshing.value = false
-                delay(3000) // Wait for 3 seconds before parsing again
+                val csvFile = findMostRecentCSVFile()
+                
+                if (csvFile != null) {
+                    val currentModifiedTime = csvFile.lastModified()
+                    
+                    // Only parse if the file was modified since last check
+                    if (currentModifiedTime > lastCsvModifiedTime) {
+                        //Log.d("AirodumpScanner", "CSV file updated, parsing new data")
+                        _isRefreshing.value = true
+                        parseCSV()
+                        _isRefreshing.value = false
+                        lastCsvModifiedTime = currentModifiedTime
+                    }
+                }
+                
+                // Small delay to prevent excessive CPU usage
+                delay(200) // Check every 200ms for file changes
             }
         }
     }
@@ -87,7 +112,10 @@ class AirodumpScanner {
         _isScanning.value = false
         shellExecutor.stop()
         airodumpJob?.cancel()
-        parserJob?.cancel()
+        fileMonitorJob?.cancel()
+        
+        // Reset last modified time
+        lastCsvModifiedTime = 0L
         
         // Clean up temporary files
         cleanupFiles()

@@ -70,6 +70,9 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     // Timestamp of first sample for relative timing
     private var firstTimestamp: Long? = null
 
+    // Expose the processing trigger for UI updates
+    val processingTrigger: StateFlow<Long> = tcpdumpManager.processingTrigger
+
     init {
         // Monitor for new directories and process them
         CoroutineScope(Dispatchers.IO).launch {

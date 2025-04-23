@@ -78,27 +78,15 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     val bitratePcaFeatures by detector.bitratePcaFeatures.collectAsState()
     val csiTimeline by detector.csiTimeline.collectAsState()
     val bitrateTimeline by detector.bitrateTimeline.collectAsState()
-
-    // Force UI refresh periodically
-    val refreshCounter = remember { mutableStateOf(0) }
     
-    // Periodically increment counter to force recomposition - only when collecting AND screen is active
-    LaunchedEffect(isCollecting) {
-        if (isCollecting) {
-            while (true) {
-                delay(1000) // Update every second
-                refreshCounter.value += 1
-                Log.d("DetectSpyCamScreen", "Forcing UI refresh")
-            }
+    // Collect the processing trigger to update UI when new data is available
+    val processingTrigger by detector.processingTrigger.collectAsState()
+    
+    // Monitor processing trigger for UI updates
+    LaunchedEffect(processingTrigger) {
+        if (processingTrigger > 0) {
+            Log.d("DetectSpyCamScreen", "UI update triggered by processingTrigger: $processingTrigger")
         }
-    }
-    
-    // Add debug logging for state updates with forced refreshes
-    LaunchedEffect(csiStats, bitrateStats, csiTimeline, bitrateTimeline, refreshCounter.value) {
-        Log.d("DetectSpyCamScreen", "Stats updated - CSI samples: ${csiStats?.sampleCount ?: 0}, " +
-                "Bitrate samples: ${bitrateStats?.sampleCount ?: 0}, " +
-                "Timeline points: CSI=${csiTimeline.size}, Bitrate=${bitrateTimeline.size}, " +
-                "Refresh cycle: ${refreshCounter.value}")
     }
 
     Box(

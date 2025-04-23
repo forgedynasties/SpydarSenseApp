@@ -69,7 +69,7 @@ class ShellExecutor {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
                         // Add command context to error message
-                        Log.e("ShellExecutor", "[$commandType] Error: $line")
+                        //Log.e("ShellExecutor", "[$commandType] Error: $line")
                         errorBuffer.append(line).append("\n")
                         
                         // Don't call callback for every error line - we'll collect them

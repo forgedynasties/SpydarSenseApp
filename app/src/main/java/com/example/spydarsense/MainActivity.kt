@@ -48,11 +48,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
@@ -191,9 +194,10 @@ fun HomeScreen(navController: NavController) {
         allScannedAPs.associateBy { AP.normalizeMac(it.mac) }
     }
 
-    // Filter stations to only include those associated with an AP
-    val associatedStations = remember(stations, apMap) {
+    // Filter stations to only include associated stations
+    val filteredStations = remember(stations, apMap) {
         stations.filter { station -> 
+            // Only include associated stations
             station.bssid != "(not associated)" && 
             apMap.containsKey(AP.normalizeMac(station.bssid))
         }
@@ -250,18 +254,26 @@ fun HomeScreen(navController: NavController) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                text = "${allScannedAPs.size}",
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "Networks Found",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(24.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Devices count
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "${filteredStations.size}",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Devices",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
                         }
 
                         // Show scanning indicator
@@ -272,13 +284,6 @@ fun HomeScreen(navController: NavController) {
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
-
-                        OutlinedButton(
-                            onClick = { /* Filter options */ },
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Filter")
-                        }
                     }
                 }
 
@@ -288,20 +293,17 @@ fun HomeScreen(navController: NavController) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    // Saved Devices Section
-                    
-                    
                     // Scanned Devices (Stations) Section
                     item {
                         ExpandableSection(
                             title = "Scanned Devices",
                             expanded = scannedDevicesExpanded.value,
                             onToggle = { scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
-                            count = associatedStations.size
+                            count = filteredStations.size
                         ) {
-                            if (associatedStations.isEmpty()) {
+                            if (filteredStations.isEmpty()) {
                                 Text(
-                                    "No devices detected",
+                                    text = "No devices detected",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     modifier = Modifier.padding(vertical = 8.dp)
@@ -310,13 +312,13 @@ fun HomeScreen(navController: NavController) {
                                 Column(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    associatedStations.forEach { station ->
+                                    filteredStations.forEach { station ->
                                         val associatedAP = apMap[AP.normalizeMac(station.bssid)]
                                         StationCard(
                                             station = station,
                                             apEssid = associatedAP?.essid ?: "Unknown",
                                             apChannel = associatedAP?.ch ?: 0,
-                                            navController = navController  // Pass navController here
+                                            navController = navController
                                         )
                                     }
                                 }
@@ -324,7 +326,7 @@ fun HomeScreen(navController: NavController) {
                         }
                     }
                     
-                    // Access Points Section
+                    // Access Points Section - unchanged
                     item {
                         ExpandableSection(
                             title = "Access Points",
@@ -382,6 +384,7 @@ fun ExpandableSection(
     expanded: Boolean,
     onToggle: () -> Unit,
     count: Int,
+    extraContent: @Composable (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     AppCard(
@@ -399,19 +402,27 @@ fun ExpandableSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "$title ($count)",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "$title ($count)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowRight,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .rotate(if (expanded) 90f else 0f),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 
-                Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowRight,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    modifier = Modifier.rotate(if (expanded) 90f else 0f),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                extraContent?.invoke()
             }
             
             // Content section

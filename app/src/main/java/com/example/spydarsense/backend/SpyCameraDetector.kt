@@ -471,13 +471,19 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         private var instance: SpyCameraDetector? = null
 
         fun getInstance(etherSrc: String = "00:00:00:00:00:00"): SpyCameraDetector {
-            return instance ?: synchronized(this) {
-                // If we have an existing instance but the MAC changed, reset it
+            return synchronized(this) {
+                // If we have an existing instance but the MAC changed, completely replace it
                 if (instance != null && instance!!.etherSrc != etherSrc) {
-                    Log.d(TAG, "MAC address changed, resetting detector instance")
+                    Log.d(TAG, "MAC address changed from ${instance!!.etherSrc} to $etherSrc, creating new detector instance")
+                    // Force reset the old instance first to clean up resources
                     instance!!.forceReset()
+                    // Explicitly set instance to null to ensure complete replacement
+                    instance = null
+                    // Create a completely new instance with the new MAC address
                     instance = SpyCameraDetector(etherSrc)
+                    Log.d(TAG, "New detector instance created with MAC: $etherSrc")
                 } else if (instance == null) {
+                    Log.d(TAG, "Creating first detector instance with MAC: $etherSrc")
                     instance = SpyCameraDetector(etherSrc)
                 }
                 instance!!

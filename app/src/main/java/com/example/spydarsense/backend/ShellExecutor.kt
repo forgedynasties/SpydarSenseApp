@@ -40,10 +40,8 @@ class ShellExecutor {
                 try {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
-                        /*if (commandType != "AIRODUMP") {
-                            Log.d("ShellExecutor", "[$commandType] Output: $line")
+                        Log.d("ShellExecutor", "[$commandType] Output: $line")
 
-                        }*/
                         outputBuffer.append(line).append("\n")
                         callback(line, 0) // Stream output line by line
                         line = reader.readLine()

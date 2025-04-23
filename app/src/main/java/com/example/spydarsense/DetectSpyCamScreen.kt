@@ -50,18 +50,26 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
 
     // Clear previous detection data when this screen is first shown
     LaunchedEffect(sessionId) {
+        // Stop any ongoing detection and clear buffers with a small delay
+        // to ensure all processes are properly terminated
+        detector.stopDetection()
+        delay(200) // Small delay to ensure cleanup completes
         detector.clearBuffers()
-        Log.d("DetectSpyCamScreen", "New detection session started: $sessionId")
+        Log.d("DetectSpyCamScreen", "New detection session started: $sessionId for MAC: $stationMac")
     }
 
     // Handle screen lifecycle - stop collecting when screen is disposed
-    DisposableEffect(key1 = true) {
+    DisposableEffect(key1 = sessionId) {
         onDispose {
+            Log.d("DetectSpyCamScreen", "Cleaning up detection session: $sessionId")
             // Stop any ongoing detection when navigating away
             if (isCollecting) {
                 detector.stopDetection()
                 isCollecting = false
             }
+            
+            // Explicitly kill any lingering processes
+            detector.forceReset()
         }
     }
 

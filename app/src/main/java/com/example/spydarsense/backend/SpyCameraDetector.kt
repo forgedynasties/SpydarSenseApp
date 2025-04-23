@@ -378,7 +378,7 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     fun clearBuffers() {
         log("Clearing all data buffers and states")
         
-         // Stop any active captures first and clear data in TcpdumpManager
+        // Stop any active captures first and clear data in TcpdumpManager
         tcpdumpManager.clearData()
         
         // Clear processed directory tracking
@@ -408,6 +408,34 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         PcapProcessor.clearTrackedPositions()
         
         log("All data buffers and states have been cleared")
+    }
+    
+    /**
+     * Force a complete reset of the detector, including killing all processes
+     * This is used when switching between devices to ensure a clean slate
+     */
+    fun forceReset() {
+        log("Forcing complete detector reset")
+        
+        // First stop any active captures
+        stopDetection()
+        
+        // Use shellExecutor to forcefully kill any lingering processes
+        shellExecutor.execute("pkill tcpdump") { output, exitCode ->
+            log("Killed tcpdump processes: $output (exit code: $exitCode)")
+        }
+        
+        shellExecutor.execute("pkill nexutil") { output, exitCode ->
+            log("Killed nexutil processes: $output (exit code: $exitCode)")
+        }
+        
+        // Clear all buffers and state
+        clearBuffers()
+        
+        // Reset stream files in TcpdumpManager
+        tcpdumpManager.resetStreamFiles()
+        
+        log("Detector has been completely reset")
     }
 
     private fun log(message: String) {
@@ -444,7 +472,15 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
 
         fun getInstance(etherSrc: String = "00:00:00:00:00:00"): SpyCameraDetector {
             return instance ?: synchronized(this) {
-                instance ?: SpyCameraDetector(etherSrc).also { instance = it }
+                // If we have an existing instance but the MAC changed, reset it
+                if (instance != null && instance!!.etherSrc != etherSrc) {
+                    Log.d(TAG, "MAC address changed, resetting detector instance")
+                    instance!!.forceReset()
+                    instance = SpyCameraDetector(etherSrc)
+                } else if (instance == null) {
+                    instance = SpyCameraDetector(etherSrc)
+                }
+                instance!!
             }
         }
     }

@@ -151,11 +151,20 @@ class TcpdumpManager(
         stopTcpdump()
         streamMonitorJob?.cancel()
         
+        // Wait a moment to make sure processes are actually killed
+        Thread.sleep(100)
+        
         // Reset stream files when stopping capture
-        csiStreamFile = null
-        brStreamFile = null
+        resetStreamFiles()
         
         Log.d("TcpdumpManager", "Captures stopped")
+    }
+
+    // Add a new method to reset stream files explicitly
+    fun resetStreamFiles() {
+        csiStreamFile = null
+        brStreamFile = null
+        Log.d("TcpdumpManager", "Stream files reset")
     }
 
     // Add a new method to clear all data
@@ -168,6 +177,10 @@ class TcpdumpManager(
         
         // Reset the trigger
         _processingTrigger.value = 0L
+        
+        // Force kill any lingering processes
+        val command = "pkill tcpdump"
+        shellExecutor.execute(command) { _, _ -> }
         
         Log.d("TcpdumpManager", "All data cleared")
     }

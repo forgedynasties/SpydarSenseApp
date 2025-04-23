@@ -69,12 +69,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.example.spydarsense.backend.SpyCameraDetector
 import com.example.spydarsense.components.ThemeToggle
 import com.example.spydarsense.data.AP
 import com.example.spydarsense.data.Station
 import com.example.spydarsense.repository.WifiScanRepository
 import com.example.spydarsense.ui.theme.rememberThemeState
 import com.example.spydarsense.components.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -123,11 +125,21 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(navController) {
                     navController.currentBackStackEntryFlow.collect { entry ->
                         val previousScreen = currentScreen
-                        currentScreen = entry.destination.route ?: ""
+                        val route = entry.destination.route ?: ""
+                        currentScreen = route
                         
                         // Stop scanning when leaving the home screen
                         if (previousScreen == "home" && currentScreen != "home") {
                             WifiScanRepository.getInstance().stopScan()
+                        }
+                        
+                        // If navigating to a detect spy cam screen, force reset detector
+                        // This ensures a clean slate for each detection session
+                        if (route.startsWith("detectSpyCam") && previousScreen.startsWith("detectSpyCam")) {
+                            // Give time for previous session to fully clean up
+                            delay(300)
+                            // Reset detector for new session
+                            SpyCameraDetector.getInstance().forceReset()
                         }
                     }
                 }

@@ -43,6 +43,11 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     val csiDirs: StateFlow<List<String>> = tcpdumpManager.csiDirs
     val brDirs: StateFlow<List<String>> = tcpdumpManager.brDirs
     val isCapturing: StateFlow<Boolean> = tcpdumpManager.isRunning
+    val captureCompleted: StateFlow<Boolean> = tcpdumpManager.captureCompleted
+
+    // Add processing state
+    private val _isProcessing = MutableStateFlow(false)
+    val isProcessing: StateFlow<Boolean> = _isProcessing
 
     // Configuration
     private val _loggingEnabled = MutableStateFlow(false)
@@ -107,7 +112,71 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
             tcpdumpManager.processingTrigger.collect { timestamp ->
                 if (timestamp > 0) {
                     log("Processing trigger received at $timestamp")
-                    processContinuousData()
+                    _isProcessing.value = true
+                    
+                    // Process the completed capture files
+                    processCompletedCaptures()
+                    
+                    _isProcessing.value = false
+                }
+            }
+        }
+        
+        // Add monitoring of capture completion
+        CoroutineScope(Dispatchers.IO).launch {
+            tcpdumpManager.captureCompleted.collect { completed ->
+                if (completed) {
+                    log("Capture completed, ready for processing")
+                }
+            }
+        }
+    }
+    
+    // New method to process completed capture files
+    private fun processCompletedCaptures() {
+        val csiFile = tcpdumpManager.getCurrentCsiFile()
+        val brFile = tcpdumpManager.getCurrentBrFile()
+        
+        log("Processing completed captures from CSI: $csiFile and Bitrate: $brFile")
+        
+        if (csiFile != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val samples = PcapProcessor.processPcapCSI(csiFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} CSI samples from completed capture")
+                        synchronized(csiSamplesBuffer) {
+                            csiSamplesBuffer.clear() // Clear old data
+                            csiSamplesBuffer.addAll(samples)
+                            updateCsiStats()
+                        }
+                    } else {
+                        log("No CSI samples found in completed capture file: $csiFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing completed CSI file $csiFile: ${e.message}")
+                    e.printStackTrace()
+                }
+            }
+        }
+        
+        if (brFile != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val samples = PcapProcessor.processPcapBitrate(brFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} bitrate samples from completed capture")
+                        synchronized(bitrateSamplesBuffer) {
+                            bitrateSamplesBuffer.clear() // Clear old data
+                            bitrateSamplesBuffer.addAll(samples)
+                            updateBitrateStats()
+                        }
+                    } else {
+                        log("No bitrate samples found in completed capture file: $brFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing completed bitrate file $brFile: ${e.message}")
+                    e.printStackTrace()
                 }
             }
         }
@@ -123,56 +192,6 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
             )
             _alignedFeatures.value = features
             log("Processed and aligned ${features.size} features")
-        }
-    }
-    
-    // Add method to process continuous data streams
-    private fun processContinuousData() {
-        val csiFile = tcpdumpManager.getCurrentCsiFile()
-        val brFile = tcpdumpManager.getCurrentBrFile()
-        
-        log("Starting continuous data processing cycle")
-        
-        if (csiFile != null) {
-            log("Processing continuous CSI data from $csiFile")
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val samples = PcapProcessor.processPcapCSI(csiFile)
-                    if (samples.isNotEmpty()) {
-                        log("Processed ${samples.size} new CSI samples")
-                        synchronized(csiSamplesBuffer) {
-                            csiSamplesBuffer.addAll(samples)
-                            updateCsiStats()
-                        }
-                    } else {
-                        log("No new CSI samples found in file: $csiFile")
-                    }
-                } catch (e: Exception) {
-                    log("Error processing CSI file $csiFile: ${e.message}")
-                    e.printStackTrace()
-                }
-            }
-        }
-        
-        if (brFile != null) {
-            log("Processing continuous bitrate data from $brFile")
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val samples = PcapProcessor.processPcapBitrate(brFile)
-                    if (samples.isNotEmpty()) {
-                        log("Processed ${samples.size} new bitrate samples")
-                        synchronized(bitrateSamplesBuffer) {
-                            bitrateSamplesBuffer.addAll(samples)
-                            updateBitrateStats()
-                        }
-                    } else {
-                        log("No new bitrate samples found in file: $brFile")
-                    }
-                } catch (e: Exception) {
-                    log("Error processing bitrate file $brFile: ${e.message}")
-                    e.printStackTrace()
-                }
-            }
         }
     }
 
@@ -191,8 +210,28 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         // Clear any existing data before starting new detection
         clearBuffers()
         
-        // Start the detection process
-        csiCollector.collectCSIBitrate(macAddress, channel)
+        // Set up CSI collection with nexutil
+        val csiParam = csiCollector.makeCSIParams(macAddress, channel)
+        if (csiParam.isEmpty()) {
+            log("Failed to generate CSI parameters, aborting detection")
+            return
+        }
+        
+        // Configure nexutil for CSI collection
+        val nexutilCommand = "nexutil -Iwlan0 -s500 -b -l34 -v$csiParam"
+        log("Configuring CSI with command: $nexutilCommand")
+        
+        shellExecutor.execute(nexutilCommand) { output, exitCode ->
+            if (exitCode == 0) {
+                log("nexutil configured successfully: $output")
+                
+                // Start 10-second captures
+                tcpdumpManager.startCaptures(10)
+                log("Started 10-second captures")
+            } else {
+                log("nexutil configuration failed: $output")
+            }
+        }
     }
 
     /**
@@ -428,6 +467,7 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         _bitrateStats.value = null
         _csiPcaFeatures.value = null
         _bitratePcaFeatures.value = null
+        _isProcessing.value = false
         
         // Clear tracked file positions in PcapProcessor
         PcapProcessor.clearTrackedPositions()
@@ -441,25 +481,25 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
      */
     fun forceReset() {
         log("Forcing complete detector reset")
-        
+
         // First stop any active captures
         stopDetection()
-        
+
         // Use shellExecutor to forcefully kill any lingering processes
         shellExecutor.execute("pkill tcpdump") { output, exitCode ->
             log("Killed tcpdump processes: $output (exit code: $exitCode)")
         }
-        
+
         shellExecutor.execute("pkill nexutil") { output, exitCode ->
             log("Killed nexutil processes: $output (exit code: $exitCode)")
         }
-        
+
         // Clear all buffers and state
         clearBuffers()
-        
-        // Reset stream files in TcpdumpManager
-        tcpdumpManager.resetStreamFiles()
-        
+
+        // Reset capture files in TcpdumpManager
+        tcpdumpManager.resetCaptureFiles()
+
         log("Detector has been completely reset")
     }
 

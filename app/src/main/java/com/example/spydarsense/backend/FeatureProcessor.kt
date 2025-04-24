@@ -24,6 +24,7 @@ class FeatureProcessor {
         bitrateTimeline: Map<Double, Int>
     ): List<AlignedFeature> = withContext(Dispatchers.Default) {
         if (csiTimeline.isEmpty() && bitrateTimeline.isEmpty()) {
+            Log.d("FeatureProcessor", "Empty timelines, no features to process")
             return@withContext emptyList()
         }
 
@@ -35,12 +36,16 @@ class FeatureProcessor {
 
         val startTime = allTimestamps.minOrNull() ?: 0.0
         val endTime = allTimestamps.maxOrNull() ?: 0.0
+        
+        Log.d("FeatureProcessor", "Processing features from $startTime to $endTime seconds")
 
         // Create uniform timeline with 0.1 increments starting from 0
         val timelineStep = 0.1
         val uniformTimeline = generateSequence(0.0) { it + timelineStep }
             .takeWhile { it <= endTime - startTime }
             .toList()
+        
+        Log.d("FeatureProcessor", "Created uniform timeline with ${uniformTimeline.size} points")
 
         // Process CSI data - create map with shifted timestamps
         val shiftedCsiMap = csiTimeline.mapKeys { (key, _) -> 
@@ -50,10 +55,12 @@ class FeatureProcessor {
         // Process CSI data - forward fill and backward fill
         val filledCsiMap = fillMissingCSI(uniformTimeline, shiftedCsiMap)
         
-        // Calculate average of 12 values for each timestamp (mean of CSI amplitudes)
+        // Calculate average of values for each timestamp (mean of CSI amplitudes)
         val averagedCsiMap = filledCsiMap.mapValues { (_, values) -> 
             values.average().toFloat()
         }
+        
+        Log.d("FeatureProcessor", "Processed CSI data with ${averagedCsiMap.size} time points")
 
         // Process bitrate data - create map with shifted timestamps and fill missing with 0
         val shiftedBitrateMap = bitrateTimeline.mapKeys { (key, _) -> 
@@ -63,15 +70,21 @@ class FeatureProcessor {
         
         // Apply median filter to bitrate data
         val filteredBitrateMap = applyMedianFilter(filledBitrateMap, windowSize = 3, stride = 1)
+        
+        Log.d("FeatureProcessor", "Processed bitrate data with ${filteredBitrateMap.size} time points")
 
         // Combine data into aligned features
-        return@withContext uniformTimeline.map { time ->
+        val result = uniformTimeline.map { time ->
             AlignedFeature(
                 timestamp = time,
                 csiFeature = averagedCsiMap[time] ?: 0f,
                 bitrateFeature = filteredBitrateMap[time] ?: 0
             )
         }
+        
+        Log.d("FeatureProcessor", "Created ${result.size} aligned features")
+        
+        return@withContext result
     }
 
     /**

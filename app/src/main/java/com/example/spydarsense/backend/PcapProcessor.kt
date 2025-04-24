@@ -373,7 +373,6 @@ object PcapProcessor {
             val file = File(pcapFilepath)
             val pcapFileSize = file.length()
             
-            // Debug logging for file growth
             Log.d("PcapBitrate", "[BITRATE] File $pcapFilepath: last position = $lastPosition, current size = $pcapFileSize")
             
             // If the file hasn't grown since last read, return empty list
@@ -382,34 +381,80 @@ object PcapProcessor {
                 return emptyList()
             }
             
-            // IMPORTANT FIX: Use a simulated approach to generate some bitrate samples for testing
-            // This ensures we always get some data to display
-            val numNewSamples = ((pcapFileSize - lastPosition) / 100).toInt().coerceAtLeast(1)
-            Log.d("PcapBitrate", "[BITRATE] Generating $numNewSamples simulated bitrate samples")
+            // Read the pcap file
+            val fc = file.readBytes()
             
-            val samples = mutableListOf<BitrateSample>()
-            val random = Random()
+            // Process packets to calculate bitrate
+            val packetSizes = mutableListOf<Pair<Double, Int>>()
+            var ptr = 24  // Skip PCAP global header
             
-            for (i in 0 until numNewSamples) {
-                // Generate timestamp relative to the first timestamp (if any)
-                val timestamp = if (firstTimestamp == null) {
-                    firstTimestamp = System.currentTimeMillis() / 1000 * 1_000_000L
-                    0.0
-                } else {
-                    (System.currentTimeMillis() / 1000 * 1_000_000L - firstTimestamp!!) / 1_000_000.0
+            // Track the first timestamp for relative timing
+            var firstPacketTime: Double? = null
+            
+            while (ptr + 16 <= fc.size) {
+                try {
+                    // Read packet header (16 bytes)
+                    val tsSec = ByteBuffer.wrap(fc, ptr, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    val tsUsec = ByteBuffer.wrap(fc, ptr + 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    val inclLen = ByteBuffer.wrap(fc, ptr + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    val origLen = ByteBuffer.wrap(fc, ptr + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    
+                    // Calculate packet timestamp
+                    val timestamp = tsSec.toDouble() + (tsUsec.toDouble() / 1_000_000.0)
+                    
+                    // Initialize first timestamp if not set
+                    if (firstPacketTime == null) {
+                        firstPacketTime = timestamp
+                    }
+                    
+                    // Calculate relative timestamp
+                    val relativeTime = timestamp - (firstPacketTime ?: timestamp)
+                    
+                    // Calculate packet data size (subtract Ethernet + IP + UDP/TCP headers)
+                    // Typical header size: 14 (Ethernet) + 20 (IP) + 8 (UDP) = 42 bytes
+                    val headerSize = 42
+                    val dataSize = if (inclLen > headerSize) inclLen - headerSize else 0
+                    
+                    // Add to our list
+                    packetSizes.add(Pair(relativeTime, dataSize))
+                    
+                    // Move to next packet
+                    ptr += 16 + inclLen
+                } catch (e: Exception) {
+                    Log.e("PcapBitrate", "[BITRATE] Error processing packet at offset $ptr: ${e.message}")
+                    ptr += 16  // Skip this packet header
                 }
-                
-                // Generate random bitrate between 500 and 1500
-                val bitrate = 500 + random.nextInt(1000)
-                
-                samples.add(BitrateSample(timestamp, bitrate))
             }
             
-            // Update the last read position
+            // Update last read position
             lastReadPositions[pcapFilepath] = pcapFileSize
-            Log.d("PcapBitrate", "[BITRATE] Updated last position to $pcapFileSize, got ${samples.size} samples")
             
-            return samples
+            // Calculate bitrates in 100ms intervals
+            val intervalSizeSeconds = 0.1
+            val bitrateSamples = mutableListOf<BitrateSample>()
+            
+            if (packetSizes.isNotEmpty()) {
+                // Group packets by time interval
+                val intervalMap = packetSizes.groupBy { 
+                    (it.first / intervalSizeSeconds).toInt() * intervalSizeSeconds
+                }
+                
+                // Calculate bitrate for each interval
+                intervalMap.forEach { (timePoint, packets) ->
+                    // Sum all data sizes in this interval and convert to bits
+                    val totalBits = packets.sumOf { it.second } * 8
+                    
+                    // Calculate bits per second
+                    val bitrateKbps = (totalBits / intervalSizeSeconds / 1000).toInt()
+                    
+                    // Add to our results
+                    bitrateSamples.add(BitrateSample(timePoint, bitrateKbps))
+                }
+            }
+            
+            Log.d("PcapBitrate", "[BITRATE] Calculated ${bitrateSamples.size} real bitrate samples")
+            return bitrateSamples
+            
         } catch (e: Exception) {
             Log.e("PcapBitrate", "[BITRATE] Error processing bitrate file: ${e.message}")
             e.printStackTrace()

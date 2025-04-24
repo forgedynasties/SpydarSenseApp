@@ -50,6 +50,10 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     val df = remember { DecimalFormat("#.##") }
     val scrollState = rememberScrollState()
 
+    // Get state from detector
+    val captureCompleted by detector.captureCompleted.collectAsState()
+    val isProcessing by detector.isProcessing.collectAsState()
+
     // Clear previous detection data when this screen is first shown
     LaunchedEffect(sessionId) {
         // Stop any ongoing detection and clear buffers with a small delay
@@ -95,10 +99,10 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     // Collect the processing trigger to update UI when new data is available
     val processingTrigger by detector.processingTrigger.collectAsState()
     
-    // Monitor processing trigger for UI updates
-    LaunchedEffect(processingTrigger) {
-        if (processingTrigger > 0) {
-            Log.d("DetectSpyCamScreen", "UI update triggered by processingTrigger: $processingTrigger")
+    // Update capturing state when completed
+    LaunchedEffect(captureCompleted) {
+        if (captureCompleted && isCollecting) {
+            isCollecting = false
         }
     }
 
@@ -182,33 +186,82 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        // Start/Stop Button
+                        // Start/Stop Button - update based on capture state
                         val buttonScale = animateFloatAsState(
                             targetValue = if (isCollecting) 1.05f else 1f,
                             label = "buttonScale"
                         )
                         
+                        // Button text depends on the current state
+                        val buttonText = when {
+                            isCollecting -> "Stop Detection (${if (captureCompleted) "Complete" else "Recording..."})"
+                            captureCompleted -> "Start New Detection"
+                            isProcessing -> "Processing Data..."
+                            else -> "Start Detection"
+                        }
+                        
+                        // Button color depends on the current state
+                        val buttonColor = when {
+                            isCollecting -> Color.Red
+                            isProcessing -> MaterialTheme.colorScheme.secondary
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                        
+                        // Button is disabled during processing
                         Button(
                             onClick = {
                                 if (isCollecting) {
                                     detector.stopDetection()
+                                    isCollecting = false
                                 } else {
                                     coroutineScope.launch {
-                                        // Now using station MAC address for detection
                                         detector.startDetection(stationMac, ch)
+                                        isCollecting = true
                                     }
                                 }
-                                isCollecting = !isCollecting
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .scale(buttonScale.value),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isCollecting) Color.Red else MaterialTheme.colorScheme.primary
+                                containerColor = buttonColor
                             ),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(8.dp),
+                            enabled = !isProcessing
                         ) {
-                            Text(if (isCollecting) "Stop Detection" else "Start Detection")
+                            Text(buttonText)
+                        }
+                        
+                        // Show capture status message
+                        if (captureCompleted) {
+                            Text(
+                                text = "capture completed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                textAlign = TextAlign.Center
+                            )
+                        } else if (isProcessing) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Processing data...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
                         }
                     }
                 }
@@ -344,10 +397,55 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         
                         Divider(modifier = Modifier.padding(vertical = 4.dp))
                         
-                        // Aligned Features Visualization
-                        if (alignedFeatures.isNotEmpty()) {
+                        // Show processing or results status
+                        if (isProcessing) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(100.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    CircularProgressIndicator()
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Processing capture data...",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        } else if (captureCompleted && alignedFeatures.isNotEmpty()) {
+                            // Raw Bitrate Data Visualization
+                            if (bitrateTimeline.isNotEmpty()) {
+                                Text(
+                                    text = "Raw Bitrate Data",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                
+                                BitrateTimelineChart(
+                                    title = "",
+                                    data = bitrateTimeline.toList(),
+                                    height = 150.dp
+                                )
+                                
+                                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                            }
+                            
+                            // Aligned Features Visualization
+                            Text(
+                                text = "CSI and Bitrate Combined View",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            
                             AlignedFeaturesChart(
-                                title = "CSI and Bitrate Combined View",
+                                title = "",
                                 features = alignedFeatures,
                                 height = 200.dp
                             )
@@ -385,13 +483,43 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                 )
                             }
                         } else {
-                            EmptyDataIndicator(text = "No aligned feature data yet")
+                            EmptyDataIndicator(
+                                text = if (captureCompleted) 
+                                    "Capture completed but no features detected" 
+                                else 
+                                    "Start a 10-second detection to see results"
+                            )
                         }
                     }
                 }
                 
-                // Remove the detailed stats section toggle and content
-                // The TextButton and conditional showExtraStats block are removed
+                // Action buttons at the bottom
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    AppOutlinedButton(
+                        text = "Clear Data",
+                        onClick = { 
+                            detector.clearBuffers()
+                            if (isCollecting) {
+                                isCollecting = false
+                            }
+                        }
+                    )
+                    
+                    if (captureCompleted && alignedFeatures.isNotEmpty()) {
+                        AppOutlinedButton(
+                            text = "Analyze Results",
+                            onClick = {
+                                // This would launch an analysis screen or dialog
+                                // For now it's just a placeholder
+                            }
+                        )
+                    }
+                }
                 
                 Spacer(modifier = Modifier.height(24.dp))
             }

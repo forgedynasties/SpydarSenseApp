@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import com.example.spydarsense.data.CSISample
+import kotlinx.coroutines.delay
 
 /**
  * SpyCameraDetector serves as the main driver class for backend operations.
@@ -83,6 +84,13 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     // Expose the processing trigger for UI updates
     val processingTrigger: StateFlow<Long> = tcpdumpManager.processingTrigger
 
+    // Add processing stage tracking
+    private val _processingStage = MutableStateFlow("Ready")
+    val processingStage: StateFlow<String> = _processingStage
+    
+    private val _processingProgress = MutableStateFlow(0f)
+    val processingProgress: StateFlow<Float> = _processingProgress
+
     init {
         // Monitor for new directories and process them
         CoroutineScope(Dispatchers.IO).launch {
@@ -132,92 +140,34 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         }
     }
     
-    // New method to process completed capture files
-    private fun processCompletedCaptures() {
-        val csiFile = tcpdumpManager.getCurrentCsiFile()
-        val brFile = tcpdumpManager.getCurrentBrFile()
-        
-        log("Processing completed captures from CSI: $csiFile and Bitrate: $brFile")
-        
-        if (csiFile != null) {
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val samples = PcapProcessor.processPcapCSI(csiFile)
-                    if (samples.isNotEmpty()) {
-                        log("Processed ${samples.size} CSI samples from completed capture")
-                        synchronized(csiSamplesBuffer) {
-                            csiSamplesBuffer.clear() // Clear old data
-                            csiSamplesBuffer.addAll(samples)
-                            updateCsiStats()
-                        }
-                    } else {
-                        log("No CSI samples found in completed capture file: $csiFile")
-                    }
-                } catch (e: Exception) {
-                    log("Error processing completed CSI file $csiFile: ${e.message}")
-                    e.printStackTrace()
-                }
-            }
-        }
-        
-        if (brFile != null) {
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val samples = PcapProcessor.processPcapBitrate(brFile)
-                    if (samples.isNotEmpty()) {
-                        log("Processed ${samples.size} bitrate samples from completed capture")
-                        synchronized(bitrateSamplesBuffer) {
-                            bitrateSamplesBuffer.clear() // Clear old data
-                            bitrateSamplesBuffer.addAll(samples)
-                            updateBitrateStats()
-                        }
-                    } else {
-                        log("No bitrate samples found in completed capture file: $brFile")
-                    }
-                } catch (e: Exception) {
-                    log("Error processing completed bitrate file $brFile: ${e.message}")
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
-    
-    // Add method to process and align features
-    private fun processAndAlignFeatures() {
-        CoroutineScope(Dispatchers.IO).launch {
-            log("Processing and aligning features...")
-            val features = featureProcessor.processFeatures(
-                csiTimeline = _csiTimeline.value,
-                bitrateTimeline = _bitrateTimeline.value
-            )
-            _alignedFeatures.value = features
-            log("Processed and aligned ${features.size} features")
-        }
-    }
-
-    fun enableLogging(enabled: Boolean) {
-        _loggingEnabled.value = enabled
-        // Update all components that use logging
-        Log.d("SpyCameraDetector", "Logging ${if (enabled) "enabled" else "disabled"}")
-    }
-
     /**
      * Start collecting CSI and bitrate data for the specified device
      */
-    suspend fun startDetection(macAddress: String, channel: Int) {
-        log("Starting detection for MAC: $macAddress on channel: $channel")
+    suspend fun startDetection(macAddress: String, channel: Int, captureSeconds: Int = 10) {
+        log("Starting detection for MAC: $macAddress on channel: $channel for $captureSeconds seconds")
+        
+        // Update processing stage
+        _processingStage.value = "Initializing detection..."
+        _processingProgress.value = 0f
         
         // Clear any existing data before starting new detection
         clearBuffers()
         
         // Set up CSI collection with nexutil
+        _processingStage.value = "Configuring CSI parameters..."
+        _processingProgress.value = 0.1f
+        
         val csiParam = csiCollector.makeCSIParams(macAddress, channel)
         if (csiParam.isEmpty()) {
             log("Failed to generate CSI parameters, aborting detection")
+            _processingStage.value = "Failed to configure CSI"
             return
         }
         
         // Configure nexutil for CSI collection
+        _processingStage.value = "Setting up network monitor..."
+        _processingProgress.value = 0.2f
+        
         val nexutilCommand = "nexutil -Iwlan0 -s500 -b -l34 -v$csiParam"
         log("Configuring CSI with command: $nexutilCommand")
         
@@ -225,11 +175,25 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
             if (exitCode == 0) {
                 log("nexutil configured successfully: $output")
                 
-                // Start 10-second captures
-                tcpdumpManager.startCaptures(10)
-                log("Started 10-second captures")
+                // Update processing stage
+                _processingStage.value = "Starting data capture (${captureSeconds}s)..."
+                _processingProgress.value = 0.3f
+                
+                // Start captures with the specified duration
+                tcpdumpManager.startCaptures(captureSeconds)
+                log("Started ${captureSeconds}-second captures")
+                
+                // Start a countdown on the processing stage
+                CoroutineScope(Dispatchers.Main).launch {
+                    for (i in captureSeconds downTo 1) {
+                        _processingStage.value = "Capturing data... ${i}s remaining"
+                        _processingProgress.value = 0.3f + (0.4f * (captureSeconds - i) / captureSeconds)
+                        delay(1000)
+                    }
+                }
             } else {
                 log("nexutil configuration failed: $output")
+                _processingStage.value = "Failed to configure network monitor"
             }
         }
     }
@@ -278,6 +242,96 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
                 updateBitrateStats()
             }
         }
+    }
+
+    // New method to process completed capture files
+    private fun processCompletedCaptures() {
+        val csiFile = tcpdumpManager.getCurrentCsiFile()
+        val brFile = tcpdumpManager.getCurrentBrFile()
+        
+        _processingStage.value = "Processing captured data..."
+        _processingProgress.value = 0.7f
+        
+        log("Processing completed captures from CSI: $csiFile and Bitrate: $brFile")
+        
+        if (csiFile != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val samples = PcapProcessor.processPcapCSI(csiFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} CSI samples from completed capture")
+                        _processingStage.value = "Processing CSI samples..."
+                        _processingProgress.value = 0.75f
+                        
+                        synchronized(csiSamplesBuffer) {
+                            csiSamplesBuffer.clear() // Clear old data
+                            csiSamplesBuffer.addAll(samples)
+                            updateCsiStats()
+                        }
+                    } else {
+                        log("No CSI samples found in completed capture file: $csiFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing completed CSI file $csiFile: ${e.message}")
+                    e.printStackTrace()
+                }
+            }
+        }
+        
+        if (brFile != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    _processingStage.value = "Processing bitrate data..."
+                    _processingProgress.value = 0.8f
+                    
+                    val samples = PcapProcessor.processPcapBitrate(brFile)
+                    if (samples.isNotEmpty()) {
+                        log("Processed ${samples.size} bitrate samples from completed capture")
+                        synchronized(bitrateSamplesBuffer) {
+                            bitrateSamplesBuffer.clear() // Clear old data
+                            bitrateSamplesBuffer.addAll(samples)
+                            updateBitrateStats()
+                        }
+                    } else {
+                        log("No bitrate samples found in completed capture file: $brFile")
+                    }
+                } catch (e: Exception) {
+                    log("Error processing completed bitrate file $brFile: ${e.message}")
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+    
+    // Add method to process and align features
+    private fun processAndAlignFeatures() {
+        CoroutineScope(Dispatchers.IO).launch {
+            _processingStage.value = "Aligning features..."
+            _processingProgress.value = 0.85f
+            
+            log("Processing and aligning features...")
+            val features = featureProcessor.processFeatures(
+                csiTimeline = _csiTimeline.value,
+                bitrateTimeline = _bitrateTimeline.value
+            )
+            _alignedFeatures.value = features
+            
+            _processingStage.value = "Generating visualizations..."
+            _processingProgress.value = 0.95f
+            
+            delay(500) // Small delay to ensure UI updates
+            
+            _processingStage.value = "Analysis complete"
+            _processingProgress.value = 1.0f
+            
+            log("Processed and aligned ${features.size} features")
+        }
+    }
+
+    fun enableLogging(enabled: Boolean) {
+        _loggingEnabled.value = enabled
+        // Update all components that use logging
+        Log.d("SpyCameraDetector", "Logging ${if (enabled) "enabled" else "disabled"}")
     }
 
     /**
@@ -346,6 +400,9 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
             
             // Extract PCA features
             CoroutineScope(Dispatchers.IO).launch {
+                _processingStage.value = "Extracting CSI features..."
+                _processingProgress.value = 0.9f
+                
                 val pcaFeatures = pcaExtractor.extractCSIFeatures(sampleAmplitudesList)
                 _csiPcaFeatures.value = pcaFeatures
                 log("Updated CSI PCA features: ${pcaFeatures.values.size} values")

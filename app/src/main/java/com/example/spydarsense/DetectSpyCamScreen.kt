@@ -24,6 +24,7 @@ import androidx.compose.foundation.border
 import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +40,8 @@ import com.example.spydarsense.components.*
 import com.example.spydarsense.backend.AlignedFeature
 import kotlinx.coroutines.delay
 import kotlin.math.min
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.ui.draw.clip
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +56,17 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     // Get state from detector
     val captureCompleted by detector.captureCompleted.collectAsState()
     val isProcessing by detector.isProcessing.collectAsState()
+    
+    // Add state for capture duration and processing stage
+    var selectedDuration by remember { mutableStateOf(10) } // Default 10 seconds
+    var showDurationDropdown by remember { mutableStateOf(false) }
+    
+    // Get processing stage from detector
+    val processingStage by detector.processingStage.collectAsState()
+    val processingProgress by detector.processingProgress.collectAsState()
+    
+    // State for showing loading dialog
+    var showLoadingDialog by remember { mutableStateOf(false) }
 
     // Clear previous detection data when this screen is first shown
     LaunchedEffect(sessionId) {
@@ -104,6 +118,24 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
         if (captureCompleted && isCollecting) {
             isCollecting = false
         }
+    }
+    
+    // Update loading dialog visibility based on processing state
+    LaunchedEffect(isCollecting, isProcessing, captureCompleted) {
+        showLoadingDialog = isCollecting || isProcessing
+    }
+    
+    // Show loading dialog if needed
+    if (showLoadingDialog) {
+        ProcessingDialog(
+            processingStage = processingStage,
+            progress = processingProgress,
+            onDismiss = { 
+                if (!isCollecting) {
+                    showLoadingDialog = false
+                }
+            }
+        )
     }
 
     Box(
@@ -186,6 +218,26 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
+                        // Add capture duration selector
+                        Text(
+                            text = "Capture Duration",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Duration selector as segmented buttons
+                            DurationSelector(
+                                selectedDuration = selectedDuration,
+                                onDurationSelected = { selectedDuration = it }
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
                         // Start/Stop Button - update based on capture state
                         val buttonScale = animateFloatAsState(
                             targetValue = if (isCollecting) 1.05f else 1f,
@@ -215,7 +267,7 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                     isCollecting = false
                                 } else {
                                     coroutineScope.launch {
-                                        detector.startDetection(stationMac, ch)
+                                        detector.startDetection(stationMac, ch, selectedDuration)
                                         isCollecting = true
                                     }
                                 }
@@ -1007,6 +1059,116 @@ fun FeatureDataCard(feature: AlignedFeature) {
             )
         }
     }
+}
+
+@Composable
+fun DurationSelector(
+    selectedDuration: Int,
+    onDurationSelected: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Duration options
+        val durations = listOf(5, 10, 15)
+        
+        durations.forEach { duration ->
+            val isSelected = duration == selectedDuration
+            val backgroundColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            }
+            val textColor = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(backgroundColor)
+                    .border(
+                        width = 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(0.5f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .clickable { onDurationSelected(duration) }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "$duration sec",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = textColor
+                    )
+                    
+                    if (duration == 10) {
+                        Text(
+                            text = "(recommended)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = textColor.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProcessingDialog(
+    processingStage: String,
+    progress: Float,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        title = {
+            Text(
+                text = "Processing",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Just show a rotating loading animation without progress indication
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp)
+                )
+                
+                Text(
+                    text = processingStage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
+                )
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp)
+    )
 }
 
 @Preview(showBackground = true, name = "DetectSpyCamScreen Preview")

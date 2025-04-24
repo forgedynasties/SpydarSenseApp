@@ -31,10 +31,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import com.example.spydarsense.components.*
+import com.example.spydarsense.backend.AlignedFeature
 import kotlinx.coroutines.delay
 import kotlin.math.min
 
@@ -86,6 +88,9 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     val bitratePcaFeatures by detector.bitratePcaFeatures.collectAsState()
     val csiTimeline by detector.csiTimeline.collectAsState()
     val bitrateTimeline by detector.bitrateTimeline.collectAsState()
+    
+    // Collect aligned features
+    val alignedFeatures by detector.alignedFeatures.collectAsState()
     
     // Collect the processing trigger to update UI when new data is available
     val processingTrigger by detector.processingTrigger.collectAsState()
@@ -339,74 +344,54 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         
                         Divider(modifier = Modifier.padding(vertical = 4.dp))
                         
-                        // CSI Timeline Visualization
-                        if (csiTimeline.isNotEmpty()) {
-                            TimelineChart(
-                                title = "CSI Amplitude over Time",
-                                data = csiTimeline.toList().sortedBy { it.first }.take(50),
-                                height = 150.dp
+                        // Aligned Features Visualization
+                        if (alignedFeatures.isNotEmpty()) {
+                            AlignedFeaturesChart(
+                                title = "CSI and Bitrate Combined View",
+                                features = alignedFeatures,
+                                height = 200.dp
                             )
-                        } else {
-                            EmptyDataIndicator(text = "No CSI timeline data yet")
-                        }
-                        
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        // Bitrate Timeline Visualization
-                        if (bitrateTimeline.isNotEmpty()) {
-                            BitrateTimelineChart(
-                                title = "Bitrate over Time",
-                                data = bitrateTimeline.toList().sortedBy { it.first }.take(50),
-                                height = 150.dp
-                            )
-                        } else {
-                            EmptyDataIndicator(text = "No bitrate timeline data yet")
-                        }
-                    }
-                }
-                
-                // Detailed stats section (collapsible)
-                TextButton(
-                    onClick = { showExtraStats = !showExtraStats },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (showExtraStats) "Hide Advanced Analysis" else "Show Advanced Analysis")
-                }
-                
-                if (showExtraStats) {
-                    AppElevatedCard {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                            
+                            // Add textual representation of features
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
                             Text(
-                                text = "Advanced Analysis",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                text = "Feature Values",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
                             )
                             
-                            Divider(modifier = Modifier.padding(vertical = 4.dp))
-                            
-                            // PCA Features visualization if available
-                            if (csiPcaFeatures != null && csiPcaFeatures?.values?.isNotEmpty() == true) {
-                                Text(
-                                    text = "CSI Pattern Analysis",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                
-                                // Add your PCA visualization here
-                                Text(
-                                    text = "Pattern strength: ${df.format(csiPcaFeatures?.values?.average() ?: 0f)}",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            } else {
-                                EmptyDataIndicator(text = "No pattern analysis data yet")
+                            // Display feature data in a scrollable row
+                            LazyRow(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(alignedFeatures.take(15)) { feature ->
+                                    FeatureDataCard(feature = feature)
+                                }
                             }
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Swipe to see more data points →",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                        } else {
+                            EmptyDataIndicator(text = "No aligned feature data yet")
                         }
                     }
                 }
+                
+                // Remove the detailed stats section toggle and content
+                // The TextButton and conditional showExtraStats block are removed
                 
                 Spacer(modifier = Modifier.height(24.dp))
             }
@@ -673,6 +658,225 @@ fun BitrateTimelineChart(
                     paint
                 )
             }
+        }
+    }
+}
+
+// Add new chart composable for aligned features
+@Composable
+fun AlignedFeaturesChart(
+    title: String,
+    features: List<AlignedFeature>,
+    height: Dp
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+    
+    Column {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+        
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(height)
+                .padding(vertical = 8.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .padding(8.dp)
+        ) {
+            if (features.isEmpty()) {
+                // Draw text for empty data
+                val paint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.GRAY
+                    textAlign = android.graphics.Paint.Align.CENTER
+                    textSize = 14f * density
+                }
+                drawContext.canvas.nativeCanvas.drawText(
+                    "No aligned feature data available",
+                    size.width / 2f,
+                    size.height / 2f,
+                    paint
+                )
+                return@Canvas
+            }
+            
+            val width = size.width
+            val canvasHeight = size.height
+            
+            // Find max values for scaling
+            val maxCsiValue = features.maxOf { it.csiFeature }.coerceAtLeast(0.01f)
+            val maxBitrateValue = features.maxOf { it.bitrateFeature }.coerceAtLeast(1)
+            
+            // Get the max timestamp to correctly scale the x-axis
+            val maxTimestamp = features.maxOf { it.timestamp }
+            
+            // Add padding to avoid drawing on the edges
+            val padding = 16f
+            val drawWidth = width - 2 * padding
+            val drawHeight = canvasHeight - 2 * padding
+            
+            // Draw horizontal center line (separator)
+            drawLine(
+                color = Color.Gray.copy(alpha =.2f),
+                start = Offset(padding, canvasHeight / 2),
+                end = Offset(width - padding, canvasHeight / 2),
+                strokeWidth = 1f
+            )
+            
+            // Draw CSI feature line (top half)
+            for (i in 1 until features.size) {
+                val prev = features[i-1]
+                val curr = features[i]
+                
+                // Scale x position by max timestamp to ensure full range is displayed
+                val x1 = padding + (prev.timestamp / maxTimestamp * drawWidth).toFloat()
+                val y1 = padding + (drawHeight / 2) * (1 - prev.csiFeature / maxCsiValue)
+                
+                val x2 = padding + (curr.timestamp / maxTimestamp * drawWidth).toFloat()
+                val y2 = padding + (drawHeight / 2) * (1 - curr.csiFeature / maxCsiValue)
+                
+                drawLine(
+                    color = primaryColor,
+                    start = Offset(x1, y1),
+                    end = Offset(x2, y2),
+                    strokeWidth = 2f,
+                    cap = StrokeCap.Round
+                )
+                
+                // Draw circle at each data point for CSI
+                drawCircle(
+                    color = primaryColor.copy(alpha = 0.7f),
+                    radius = 2f,
+                    center = Offset(x2, y2)
+                )
+            }
+            
+            // Draw Bitrate feature line (bottom half)
+            for (i in 1 until features.size) {
+                val prev = features[i-1]
+                val curr = features[i]
+                
+                // Scale x position by max timestamp to ensure full range is displayed
+                val x1 = padding + (prev.timestamp / maxTimestamp * drawWidth).toFloat()
+                val y1 = canvasHeight / 2 + padding + (drawHeight / 2) * (prev.bitrateFeature.toFloat() / maxBitrateValue)
+                
+                val x2 = padding + (curr.timestamp / maxTimestamp * drawWidth).toFloat()
+                val y2 = canvasHeight / 2 + padding + (drawHeight / 2) * (curr.bitrateFeature.toFloat() / maxBitrateValue)
+                
+                drawLine(
+                    color = secondaryColor,
+                    start = Offset(x1, y1),
+                    end = Offset(x2, y2),
+                    strokeWidth = 2f,
+                    cap = StrokeCap.Round
+                )
+                
+                // Draw circle at each data point for Bitrate
+                drawCircle(
+                    color = secondaryColor.copy(alpha = 0.7f),
+                    radius = 2f,
+                    center = Offset(x2, y2)
+                )
+            }
+            
+            // Draw time markers - adjusted to use maxTimestamp instead of features.last().timestamp
+            val timeMarkers = 5
+            for (i in 0..timeMarkers) {
+                val time = (maxTimestamp * i / timeMarkers)
+                val x = padding + (time / maxTimestamp * drawWidth).toFloat()
+                
+                // Draw tick marks
+                drawLine(
+                    color = Color.Gray.copy(alpha = 0.5f),
+                    start = Offset(x, canvasHeight - padding/2),
+                    end = Offset(x, canvasHeight),
+                    strokeWidth = 1f
+                )
+                
+                // Draw time labels
+                val paint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.GRAY
+                    textAlign = android.graphics.Paint.Align.CENTER
+                    textSize = 10f * density
+                }
+                drawContext.canvas.nativeCanvas.drawText(
+                    "%.1f".format(time),
+                    x,
+                    canvasHeight,
+                    paint
+                )
+            }
+            
+            // Draw legend
+            val legendPaint = android.graphics.Paint().apply {
+                textAlign = android.graphics.Paint.Align.LEFT
+                textSize = 10f * density
+            }
+            
+            // CSI legend
+            legendPaint.color = primaryColor.toArgb()
+            drawContext.canvas.nativeCanvas.drawText("CSI", padding, padding - 2, legendPaint)
+            
+            // Bitrate legend
+            legendPaint.color = secondaryColor.toArgb()
+            drawContext.canvas.nativeCanvas.drawText(
+                "Bitrate", 
+                padding, 
+                canvasHeight / 2 + padding - 2, 
+                legendPaint
+            )
+        }
+    }
+}
+
+@Composable
+fun FeatureDataCard(feature: AlignedFeature) {
+    Card(
+        modifier = Modifier
+            .width(100.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "T: ${String.format("%.1f", feature.timestamp)}s",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            
+            Divider(
+                modifier = Modifier.padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+            )
+            
+            Text(
+                text = "CSI: ${String.format("%.2f", feature.csiFeature)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            
+            Text(
+                text = "BR: ${feature.bitrateFeature} Mbps",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary
+            )
         }
     }
 }

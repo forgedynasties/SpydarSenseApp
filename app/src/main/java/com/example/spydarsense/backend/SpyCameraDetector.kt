@@ -52,6 +52,7 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     private val csiIndicesToKeep = intArrayOf(4, 8, 13, 18, 22, 27, 34, 38, 43, 48, 52, 58)
 
     private val pcaExtractor = PCAFeatureExtractor()
+    private val featureProcessor = FeatureProcessor()
 
     // New state flows for PCA features
     private val _csiPcaFeatures = MutableStateFlow<PCAFeatureExtractor.PCAFeatures?>(null)
@@ -66,6 +67,10 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
     
     private val _bitrateTimeline = MutableStateFlow<Map<Double, Int>>(emptyMap())
     val bitrateTimeline: StateFlow<Map<Double, Int>> = _bitrateTimeline
+    
+    // New state flow for aligned features
+    private val _alignedFeatures = MutableStateFlow<List<AlignedFeature>>(emptyList())
+    val alignedFeatures: StateFlow<List<AlignedFeature>> = _alignedFeatures
     
     // Timestamp of first sample for relative timing
     private var firstTimestamp: Long? = null
@@ -105,6 +110,19 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
                     processContinuousData()
                 }
             }
+        }
+    }
+    
+    // Add method to process and align features
+    private fun processAndAlignFeatures() {
+        CoroutineScope(Dispatchers.IO).launch {
+            log("Processing and aligning features...")
+            val features = featureProcessor.processFeatures(
+                csiTimeline = _csiTimeline.value,
+                bitrateTimeline = _bitrateTimeline.value
+            )
+            _alignedFeatures.value = features
+            log("Processed and aligned ${features.size} features")
         }
     }
     
@@ -299,6 +317,9 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
                 val normalizedTimeline = pcaExtractor.normalizeCSITimeline(timestampedSamples)
                 _csiTimeline.value = normalizedTimeline
                 log("Updated CSI timeline with ${normalizedTimeline.size} time points")
+                
+                // Process and align features after updating timeline
+                processAndAlignFeatures()
             }
             
             log("Updated CSI stats: ${_csiStats.value}")
@@ -347,6 +368,9 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
             val normalizedTimeline = pcaExtractor.normalizeBitrateTimeline(timestampedSamples)
             _bitrateTimeline.value = normalizedTimeline
             log("Updated bitrate timeline with ${normalizedTimeline.size} time points")
+            
+            // Process and align features after updating timeline
+            processAndAlignFeatures()
         }
         
         log("Updated bitrate stats: ${_bitrateStats.value}")
@@ -399,6 +423,7 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         // Reset all state flows to empty values
         _csiTimeline.value = emptyMap()
         _bitrateTimeline.value = emptyMap()
+        _alignedFeatures.value = emptyList()  // Clear aligned features too
         _csiStats.value = null
         _bitrateStats.value = null
         _csiPcaFeatures.value = null

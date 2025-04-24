@@ -50,10 +50,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -63,9 +66,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -78,6 +83,7 @@ import com.example.spydarsense.ui.theme.rememberThemeState
 import com.example.spydarsense.components.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.example.spydarsense.backend.ShellExecutor
 
 class MainActivity : ComponentActivity() {
 
@@ -116,7 +122,8 @@ class MainActivity : ComponentActivity() {
 
             SpydarSenseTheme(darkTheme = isDarkTheme.value) {
                 val navController = rememberNavController()
-                val setup = true // Set to true to show the setup screen
+                // Always start with the home screen
+                val setup = false 
 
                 // Track current screen for lifecycle management
                 var currentScreen by remember { mutableStateOf("") }
@@ -144,10 +151,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                NavHost(navController = navController, startDestination = if (setup) "setup" else "home") {
-                    composable("setup") {
-                        SetupScreen(navController)
-                    }
+                NavHost(navController = navController, startDestination = "home") {
+
                     composable("home") {
                         HomeScreen(navController)
                     }
@@ -178,6 +183,12 @@ fun HomeScreen(navController: NavController) {
     // Get the repository instance
     val repository = WifiScanRepository.getInstance()
 
+    // Monitor mode state
+    var isMonitorModeEnabled by remember { mutableStateOf(false) }
+    var isToggling by remember { mutableStateOf(false) }
+    var monitorModeOutput by remember { mutableStateOf("") }
+    val shellExecutor = remember { ShellExecutor() }
+
     // Collect the APs from the repository with proper initialization
     val allScannedAPs = repository.allAccessPoints.collectAsState(initial = emptyList()).value
     val stations = repository.stations.collectAsState(initial = emptyList()).value
@@ -190,10 +201,14 @@ fun HomeScreen(navController: NavController) {
     // Calculate if we're showing all APs
     val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
 
-    // Start and stop scanning based on this composable's lifecycle
-    DisposableEffect(true) {
-        // Start scanning when the HomeScreen becomes active
-        repository.startScan()
+    // Start and stop scanning based on monitor mode state
+    DisposableEffect(isMonitorModeEnabled) {
+        // Only start scanning when monitor mode is enabled
+        if (isMonitorModeEnabled) {
+            repository.startScan()
+        } else {
+            repository.stopScan()
+        }
         
         // Stop scanning when the HomeScreen is no longer active
         onDispose {
@@ -215,6 +230,34 @@ fun HomeScreen(navController: NavController) {
         }
     }
 
+    // Function to toggle monitor mode
+    val toggleMonitorMode = {
+        isToggling = true
+        if (isMonitorModeEnabled) {
+            // Command to disable monitor mode
+            shellExecutor.execute("nexutil -Iwlan0 -m0 && nexutil -m") { output, exitCode ->
+                if (exitCode == 0 && output.contains("monitor: 0")) {
+                    isMonitorModeEnabled = false
+                    monitorModeOutput = "Monitor mode disabled"
+                } else if (output.isNotEmpty()) {
+                    monitorModeOutput = "Error: $output"
+                }
+                isToggling = false
+            }
+        } else {
+            // Command to enable monitor mode
+            shellExecutor.execute("ifconfig wlan0 up && nexutil -Iwlan0 -m1 && nexutil -m") { output, exitCode ->
+                if (exitCode == 0 && output.contains("monitor: 1")) {
+                    isMonitorModeEnabled = true
+                    monitorModeOutput = "Monitor mode enabled"
+                } else if (output.isNotEmpty()) {
+                    monitorModeOutput = "Error: $output"
+                }
+                isToggling = false
+            }
+        }
+    }
+
     // State for tracking which dropdown is expanded
     val savedDevicesExpanded = remember { mutableStateOf(false) }
     val scannedDevicesExpanded = remember { mutableStateOf(true) } // Default open
@@ -225,21 +268,23 @@ fun HomeScreen(navController: NavController) {
             AppTopBar(title = "Spydar Sense")
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    // Manually trigger a refresh
-                    if (!isRefreshing) {
-                        repository.forceRefreshScan()
-                    }
-                },
-                shape = CircleShape,
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Scan for APs"
-                )
+            if (isMonitorModeEnabled) {
+                FloatingActionButton(
+                    onClick = {
+                        // Manually trigger a refresh
+                        if (!isRefreshing) {
+                            repository.forceRefreshScan()
+                        }
+                    },
+                    shape = CircleShape,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Scan for APs"
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -248,142 +293,235 @@ fun HomeScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Column(
+            // Replace Column with LazyColumn to make the entire content scrollable
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.Top,
-                horizontalAlignment = Alignment.CenterHorizontally
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
             ) {
-                // Summary card
-                AppCard(
-                    modifier = Modifier.padding(vertical = 16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // Monitor Mode Toggle Card
+                item {
+                    AppCard(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(24.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Devices count
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally
+                            Text(
+                                text = "Monitor Mode",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // Status text
+                            Text(
+                                text = if (isMonitorModeEnabled) "Active" else "Inactive",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isMonitorModeEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                            
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            // Toggle button
+                            Button(
+                                onClick = { toggleMonitorMode() },
+                                enabled = !isToggling,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isMonitorModeEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
+                                if (isToggling) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(if (isMonitorModeEnabled) "Disable Monitor Mode" else "Enable Monitor Mode")
+                            }
+                            
+                            // Show the output/error message if any
+                            if (monitorModeOutput.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "${filteredStations.size}",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "Devices",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    text = monitorModeOutput,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (monitorModeOutput.startsWith("Error")) 
+                                        MaterialTheme.colorScheme.error 
+                                    else 
+                                        MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        }
-
-                        // Show scanning indicator
-                        if (isRefreshing) {
-                            Text(
-                                "Scanning...",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
+                            
+                            // Hint message when monitor mode is disabled
+                            if (!isMonitorModeEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "⚠️ Enable Monitor Mode to scan for networks and detect spy cameras",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
 
-                // Dropdown lists section
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp)
-                ) {
-                    // Scanned Devices (Stations) Section
-                    item {
-                        ExpandableSection(
-                            title = "Scanned Devices",
-                            expanded = scannedDevicesExpanded.value,
-                            onToggle = { scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
-                            count = filteredStations.size
+                // Summary card - show only when monitor mode is enabled or with reduced opacity
+                item {
+                    AppCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(if (isMonitorModeEnabled) 1f else 0.5f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (filteredStations.isEmpty()) {
-                                Text(
-                                    text = "No devices detected",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(vertical = 8.dp)
-                                )
-                            } else {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Devices count
                                 Column(
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    filteredStations.forEach { station ->
-                                        val associatedAP = apMap[AP.normalizeMac(station.bssid)]
-                                        StationCard(
-                                            station = station,
-                                            apEssid = associatedAP?.essid ?: "Unknown",
-                                            apChannel = associatedAP?.ch ?: 0,
-                                            navController = navController
-                                        )
+                                    Text(
+                                        text = if (isMonitorModeEnabled) "${filteredStations.size}" else "0",
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Devices",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+
+                            // Show scanning indicator only when monitor mode is enabled
+                            if (isMonitorModeEnabled && isRefreshing) {
+                                Text(
+                                    "Scanning...",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Scanned Devices (Stations) Section
+                item {
+                    ExpandableSection(
+                        title = "Scanned Devices",
+                        expanded = scannedDevicesExpanded.value && isMonitorModeEnabled,
+                        onToggle = { if (isMonitorModeEnabled) scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
+                        count = if (isMonitorModeEnabled) filteredStations.size else 0
+                    ) {
+                        if (!isMonitorModeEnabled) {
+                            Text(
+                                text = "Monitor mode is disabled. Enable it to scan for devices.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else if (filteredStations.isEmpty()) {
+                            Text(
+                                text = "No devices detected",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                filteredStations.forEach { station ->
+                                    val associatedAP = apMap[AP.normalizeMac(station.bssid)]
+                                    StationCard(
+                                        station = station,
+                                        apEssid = associatedAP?.essid ?: "Unknown",
+                                        apChannel = associatedAP?.ch ?: 0,
+                                        navController = navController
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Access Points Section
+                item {
+                    ExpandableSection(
+                        title = "Access Points",
+                        expanded = accessPointsExpanded.value && isMonitorModeEnabled,
+                        onToggle = { if (isMonitorModeEnabled) accessPointsExpanded.value = !accessPointsExpanded.value },
+                        count = if (isMonitorModeEnabled) allScannedAPs.size else 0
+                    ) {
+                        if (!isMonitorModeEnabled) {
+                            Text(
+                                text = "Monitor mode is disabled. Enable it to scan for networks.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else if (allScannedAPs.isEmpty()) {
+                            Text(
+                                "No networks found",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                allScannedAPs.take(displayedAPsCount.value).forEach { ap ->
+                                    APCard(ap, navController)
+                                }
+                                
+                                if (allScannedAPs.size > displayedAPsCount.value) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedAPsCount.value = allScannedAPs.size  // Show all
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show All")
+                                    }
+                                } else if (displayedAPsCount.value > 5) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedAPsCount.value = 5  // Reset to initial count
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show Less")
                                     }
                                 }
                             }
                         }
                     }
-                    
-                    // Access Points Section - unchanged
-                    item {
-                        ExpandableSection(
-                            title = "Access Points",
-                            expanded = accessPointsExpanded.value,
-                            onToggle = { accessPointsExpanded.value = !accessPointsExpanded.value },
-                            count = allScannedAPs.size
-                        ) {
-                            if (allScannedAPs.isEmpty()) {
-                                Text(
-                                    "No networks found",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(vertical = 8.dp)
-                                )
-                            } else {
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    allScannedAPs.take(displayedAPsCount.value).forEach { ap ->
-                                        APCard(ap, navController)
-                                    }
-                                    
-                                    if (allScannedAPs.size > displayedAPsCount.value) {
-                                        TextButton(
-                                            onClick = {
-                                                displayedAPsCount.value = allScannedAPs.size  // Show all
-                                            },
-                                            modifier = Modifier.align(Alignment.CenterHorizontally)
-                                        ) {
-                                            Text("Show All")
-                                        }
-                                    } else if (displayedAPsCount.value > 5) {
-                                        TextButton(
-                                            onClick = {
-                                                displayedAPsCount.value = 5  // Reset to initial count
-                                            },
-                                            modifier = Modifier.align(Alignment.CenterHorizontally)
-                                        ) {
-                                            Text("Show Less")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                }
+                
+                // Add some padding at the bottom for better UX
+                item {
+                    Spacer(modifier = Modifier.height(80.dp))
                 }
             }
         }

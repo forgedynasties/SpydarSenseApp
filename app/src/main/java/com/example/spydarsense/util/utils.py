@@ -264,6 +264,85 @@ def join_features(csi_feature_df, bitrate_filtered_df, how="outer"):
 
 # ----------------------- New Main Functionality -----------------------
 
+def process_and_align_features(csi_aligned, bitrate_aligned, time_interval=0.1):
+    """
+    Process CSI and bitrate data, fill missing values, and align them into a single feature set.
+    
+    Parameters:
+    -----------
+    csi_aligned : pd.DataFrame
+        Aligned CSI data with 'timestamp' and subcarrier columns.
+    bitrate_aligned : pd.DataFrame
+        Aligned bitrate data with 'timestamp' and 'bitrate_bytes' columns.
+    time_interval : float
+        The interval (in seconds) for the uniform timeline.
+    
+    Returns:
+    --------
+    features_df : pd.DataFrame
+        DataFrame with columns 'timestamp', 'csi_feature', and 'bitrate_feature'.
+    """
+    # Step 1: Fill missing values in CSI data (forward-fill then backward-fill)
+    csi_filled = fill_missing_csi(csi_aligned)
+    
+    # Step 2: Fill missing values in bitrate data with zeros
+    bitrate_filled = fill_missing_bitrate(bitrate_aligned)
+    
+    # Step 3: Extract CSI feature by averaging subcarrier values
+    subcarrier_cols = [col for col in csi_filled.columns if col.startswith("subcarrier_")]
+    csi_feature_df = pd.DataFrame({
+        'timestamp': csi_filled['timestamp'],
+        'csi_feature': csi_filled[subcarrier_cols].mean(axis=1)
+    })
+    
+    # Step 4: Apply median filter to bitrate data
+    bitrate_filtered_df = median_filter_bitrate(bitrate_filled, window_size=3, stride=1)
+    
+    # Step 5: Join features
+    features_df = join_features(csi_feature_df, bitrate_filtered_df, how='outer')
+    
+    # Step 6: Sort by timestamp and reset index
+    features_df = features_df.sort_values('timestamp').reset_index(drop=True)
+    
+    # Step 7: Shift timestamps to start from 0
+    min_timestamp = features_df['timestamp'].min()
+    features_df['timestamp'] = features_df['timestamp'] - min_timestamp
+    
+    return features_df
+
+def plot_aligned_features(features_df):
+    """
+    Plot aligned CSI and bitrate features.
+    
+    Parameters:
+    -----------
+    features_df : pd.DataFrame
+        DataFrame with columns 'timestamp', 'csi_feature', and 'bitrate_median'.
+    """
+    if features_df.empty:
+        print("No features to plot.")
+        return
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    # Plot CSI feature
+    ax1.plot(features_df['timestamp'], features_df['csi_feature'], 'b-', label='CSI Feature')
+    ax1.set_ylabel('CSI Feature Value')
+    ax1.set_title('CSI Feature (Average of 12 subcarriers)')
+    ax1.grid(True)
+    ax1.legend()
+    
+    # Plot Bitrate feature
+    ax2.plot(features_df['timestamp'], features_df['bitrate_median'], 'r-', label='Bitrate')
+    ax2.set_xlabel('Time (seconds)')
+    ax2.set_ylabel('Bitrate (bytes)')
+    ax2.set_title('Median-Filtered Bitrate')
+    ax2.grid(True)
+    ax2.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
 def process_file_set(csi_mag_filepath, csi_meta_filepath, br_filepath):
     # Load CSI Magnitude Data (assumes no header)
     try:
@@ -292,27 +371,45 @@ def process_file_set(csi_mag_filepath, csi_meta_filepath, br_filepath):
     csi_aligned_filled = fill_missing_csi(csi_aligned)
     bitrate_aligned = calculate_bitrate_and_align(br_df, time_interval=0.1, header_adjust=34)
     bitrate_aligned_filled = fill_missing_bitrate(bitrate_aligned)
-    csi_feature_df = csi_feature_extraction(csi_aligned_filled, window_size=10, stride=1)
+    
+    # Apply median filter to bitrate and average CSI subcarriers
     bitrate_filtered_df = median_filter_bitrate(bitrate_aligned_filled, window_size=3, stride=1)
-    print(csi_feature_df.head())
-    print(bitrate_filtered_df.head())
-    joined_features = join_features(csi_feature_df, bitrate_filtered_df, how="inner")
-
+    
+    # Process and align features
+    aligned_features = process_and_align_features(csi_aligned_filled, bitrate_aligned)
+    
     # --- Plot Results ---
+    # Original feature plots
     fig, axs = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    axs[0].plot(joined_features["timestamp"], joined_features["csi_feature"], "b.-", label="CSI Feature")
-    axs[0].set_title("Extracted CSI Feature (PCA-based)")
+    axs[0].plot(aligned_features["timestamp"], aligned_features["csi_feature"], "b.-", label="CSI Feature")
+    axs[0].set_title("CSI Feature (Average of 12 subcarriers)")
     axs[0].set_ylabel("CSI Feature Value")
     axs[0].legend(loc="upper right")
     axs[0].grid(True)
-    # axs[0].set_ylim(0, 1)
-    axs[1].plot(joined_features["timestamp"], joined_features["bitrate_median"], "r.-", label="Bitrate")
-    axs[1].set_title("Aligned Bitrate Data")
+    
+    axs[1].plot(aligned_features["timestamp"], aligned_features["bitrate_median"], "r.-", label="Bitrate")
+    axs[1].set_title("Median-Filtered Bitrate")
     axs[1].set_xlabel("Timestamp (s)")
     axs[1].set_ylabel("Bitrate (bytes)")
     axs[1].legend(loc="upper right")
     axs[1].grid(True)
-    # axs[1].set_ylim(0, 1)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Combined view plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(aligned_features["timestamp"], 
+             aligned_features["csi_feature"] / aligned_features["csi_feature"].max(), 
+             "b-", label="CSI (normalized)")
+    plt.plot(aligned_features["timestamp"], 
+             aligned_features["bitrate_median"] / aligned_features["bitrate_median"].max(), 
+             "r-", label="Bitrate (normalized)")
+    plt.title("Aligned CSI and Bitrate Features (Normalized)")
+    plt.xlabel("Time (seconds)")
+    plt.ylabel("Normalized Value")
+    plt.legend()
+    plt.grid(True)
     plt.tight_layout()
     plt.show()
 

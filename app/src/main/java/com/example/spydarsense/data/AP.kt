@@ -51,18 +51,5 @@ class AP(
         return mac.lowercase().trim().replace("-", ":")
     }
     
-    // Override equals and hashCode for proper duplicate detection
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is AP) return false
-        return normalizeMac(mac) == normalizeMac(other.mac)
-    }
-    
-    override fun hashCode(): Int {
-        return normalizeMac(mac).hashCode()
-    }
-    
-    private fun normalizeMac(mac: String): String {
-        return mac.lowercase().trim().replace("-", ":")
-    }
+
 }

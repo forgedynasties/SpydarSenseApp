@@ -23,6 +23,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
@@ -41,6 +42,7 @@ import com.example.spydarsense.backend.AlignedFeature
 import kotlinx.coroutines.delay
 import kotlin.math.min
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.PathEffect
 import com.example.spydarsense.backend.SpyCamClassifier
@@ -1130,60 +1132,84 @@ fun DurationSelector(
     selectedDuration: Int,
     onDurationSelected: (Int) -> Unit
 ) {
-    Row(
+    // Declare dropdown state at the component level
+    var showDurationDropdown by remember { mutableStateOf(false) }
+    
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(vertical = 8.dp)
     ) {
-        // Duration options
-        val durations = listOf(5, 10, 15)
-        
-        durations.forEach { duration ->
-            val isSelected = duration == selectedDuration
-            val backgroundColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            }
-            val textColor = if (isSelected) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(backgroundColor)
-                    .border(
-                        width = 1.dp,
-                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(0.5f),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    .clickable { onDurationSelected(duration) }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
+        // Dropdown trigger button - fix the onClick handler to update the state
+        OutlinedButton(
+            onClick = { showDurationDropdown = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "$duration sec",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        color = textColor
-                    )
-                    
-                    if (duration == 10) {
-                        Text(
-                            text = "(recommended)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = textColor.copy(alpha = 0.8f)
-                        )
-                    }
-                }
+                Text(
+                    text = "$selectedDuration seconds" + if (selectedDuration == 10) " (recommended)" else "",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "Select duration"
+                )
+            }
+        }
+
+        // Dropdown menu - removed redundant declaration of showDurationDropdown
+        DropdownMenu(
+            expanded = showDurationDropdown,
+            onDismissRequest = { showDurationDropdown = false },
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .background(MaterialTheme.colorScheme.surface)
+        ) {
+            // Duration options
+            val durations = listOf(5, 10, 15)
+            
+            durations.forEach { duration ->
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$duration seconds",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (duration == 10) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "(recommended)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary, // Highlight color for recommended option
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    },
+                    onClick = {
+                        onDurationSelected(duration)
+                        showDurationDropdown = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    leadingIcon = if (duration == selectedDuration) {
+                        {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else null
+                )
             }
         }
     }

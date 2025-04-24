@@ -11,6 +11,7 @@ class AP(
     var beacons: Int = 0, // Number of beacons
     var data: Int = 0, // Data packets
     var ivs: Int = 0 // Number of IVs
+
 ) {
     companion object {
         private val apList = mutableListOf<AP>()
@@ -27,24 +28,27 @@ class AP(
 
     fun update(
         essid: String?,
-        enc: String,
-        cipher: String,
-        auth: String,
-        pwr: Int,
-        beacons: Int,
-        data: Int,
-        ivs: Int,
-        ch: Int
+        ch: Int,
+        pwr: Int = this.pwr
     ) {
         this.essid = essid
-        this.enc = enc
-        this.cipher = cipher
-        this.auth = auth
-        this.pwr = pwr
-        this.beacons = beacons
-        this.data = data
-        this.ivs = ivs
         this.ch = ch
+        this.pwr = pwr
+    }
+    
+    // Override equals and hashCode for proper duplicate detection
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is AP) return false
+        return normalizeMac(mac) == normalizeMac(other.mac)
+    }
+    
+    override fun hashCode(): Int {
+        return normalizeMac(mac).hashCode()
+    }
+    
+    private fun normalizeMac(mac: String): String {
+        return mac.lowercase().trim().replace("-", ":")
     }
     
     // Override equals and hashCode for proper duplicate detection

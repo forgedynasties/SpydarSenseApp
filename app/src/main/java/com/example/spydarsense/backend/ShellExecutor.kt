@@ -96,8 +96,7 @@ class ShellExecutor {
         process?.destroy()
         
         // Log that we're stopping the process
-        Log.d("ShellExecutor", "Stopping process for command: $currentCommand")
-        
+
         outputThread?.interrupt()
         errorThread?.interrupt()
         try {
@@ -106,7 +105,6 @@ class ShellExecutor {
         } catch (e: InterruptedException) {
             Log.e("ShellExecutor", "Interrupted while joining threads: ${e.message}")
         }
-        Log.d("ShellExecutor", "Process stopped for command: $currentCommand")
         currentCommand = "" // Clear the command reference
     }
 }

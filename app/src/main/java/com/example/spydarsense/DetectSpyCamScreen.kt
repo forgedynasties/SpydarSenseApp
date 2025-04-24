@@ -42,6 +42,8 @@ import kotlinx.coroutines.delay
 import kotlin.math.min
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.PathEffect
+import com.example.spydarsense.backend.SpyCamClassifier
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,6 +69,13 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     
     // State for showing loading dialog
     var showLoadingDialog by remember { mutableStateOf(false) }
+    
+    // Add state for classification results
+    var classificationResult by remember { mutableStateOf<SpyCamClassifier.ClassificationResult?>(null) }
+    var showResultDialog by remember { mutableStateOf(false) }
+    
+    // Create classifier instance
+    val classifier = remember { SpyCamClassifier() }
 
     // Clear previous detection data when this screen is first shown
     LaunchedEffect(sessionId) {
@@ -542,6 +551,34 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                     "Start a 10-second detection to see results"
                             )
                         }
+                        
+                        // Show classification results if available
+                        if (classificationResult != null) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            ClassificationResultCard(
+                                result = classificationResult!!,
+                                onDismiss = { classificationResult = null }
+                            )
+                            
+                            // Show correlation visualization
+                            if (classificationResult!!.detectionPoints.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                
+                                Text(
+                                    text = "Correlation Analysis",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                
+                                CorrelationVisualization(
+                                    features = alignedFeatures,
+                                    classificationResult = classificationResult!!,
+                                    height = 180.dp
+                                )
+                            }
+                        }
                     }
                 }
                 
@@ -556,6 +593,7 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         text = "Clear Data",
                         onClick = { 
                             detector.clearBuffers()
+                            classificationResult = null
                             if (isCollecting) {
                                 isCollecting = false
                             }
@@ -566,8 +604,26 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         AppOutlinedButton(
                             text = "Analyze Results",
                             onClick = {
-                                // This would launch an analysis screen or dialog
-                                // For now it's just a placeholder
+                                // Use the classifier to analyze the aligned features
+                                coroutineScope.launch {
+                                    // Show loading first
+                                    showLoadingDialog = true
+                                    detector.updateProcessingStage("Analyzing patterns...")
+                                    detector.updateProcessingProgress(0.5f)
+                                    
+                                    // Small delay for UI feedback
+                                    delay(500)
+                                    
+                                    // Run the classifier
+                                    val result = classifier.analyze(alignedFeatures)
+                                    classificationResult = result
+                                    
+                                    // Hide loading dialog
+                                    showLoadingDialog = false
+                                    
+                                    // Show result dialog
+                                    showResultDialog = true
+                                }
                             }
                         )
                     }
@@ -576,6 +632,14 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
+    
+    // Show result dialog if needed
+    if (showResultDialog && classificationResult != null) {
+        ClassificationResultDialog(
+            result = classificationResult!!,
+            onDismiss = { showResultDialog = false }
+        )
     }
 }
 
@@ -1169,6 +1233,403 @@ fun ProcessingDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(16.dp)
     )
+}
+
+@Composable
+fun ClassificationResultCard(
+    result: SpyCamClassifier.ClassificationResult,
+    onDismiss: () -> Unit
+) {
+    val backgroundColor = when {
+        result.isSpyCam && result.confidence > 0.7f -> MaterialTheme.colorScheme.errorContainer
+        result.isSpyCam -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    
+    val textColor = when {
+        result.isSpyCam && result.confidence > 0.7f -> MaterialTheme.colorScheme.onErrorContainer
+        result.isSpyCam -> MaterialTheme.colorScheme.onTertiaryContainer
+        else -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = backgroundColor
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (result.isSpyCam) "Spy Camera Detected" else "Not a Spy Camera",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = textColor
+                )
+                
+                // Add confidence indicator
+                if (result.isSpyCam) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text(
+                            text = "Confidence: ${(result.confidence * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+            
+            Divider(color = textColor.copy(alpha = 0.3f))
+            
+            Text(
+                text = result.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = textColor
+            )
+            
+            // Add detection statistics
+            if (result.csiChangePoints.isNotEmpty() || result.bitrateChangePoints.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    text = "Detection statistics:",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                
+                BulletText(
+                    text = "${result.csiChangePoints.size} CSI change points detected",
+                    textColor = textColor
+                )
+                
+                BulletText(
+                    text = "${result.bitrateChangePoints.size} bitrate change points detected",
+                    textColor = textColor
+                )
+                
+                BulletText(
+                    text = "${result.detectionPoints.size} correlated changes detected",
+                    textColor = textColor
+                )
+            }
+            
+            // Close button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Dismiss")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BulletText(
+    text: String,
+    textColor: Color
+) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.padding(start = 8.dp)
+    ) {
+        Text(
+            text = "•",
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor
+        )
+    }
+}
+
+@Composable
+fun ClassificationResultDialog(
+    result: SpyCamClassifier.ClassificationResult,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (result.isSpyCam) "Spy Camera Detected" else "Not a Spy Camera",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = if (result.isSpyCam) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = result.message,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                if (result.isSpyCam) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "What should you do?",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "• Inspect the device more carefully\n" +
+                               "• Consider turning it off or disconnecting it\n" +
+                               "• Look for unusual features or holes\n" +
+                               "• If possible, contact the device owner",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (result.isSpyCam) 
+                        MaterialTheme.colorScheme.error 
+                    else 
+                        MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text("Understood")
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp)
+    )
+}
+
+@Composable
+fun CorrelationVisualization(
+    features: List<AlignedFeature>,
+    classificationResult: SpyCamClassifier.ClassificationResult,
+    height: Dp
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+    val correlationColor = MaterialTheme.colorScheme.error
+    
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .padding(vertical = 8.dp)
+            .border(
+                width = 1.dp, 
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(8.dp)
+    ) {
+        if (features.isEmpty()) {
+            // Draw text for empty data
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.GRAY
+                textAlign = android.graphics.Paint.Align.CENTER
+                textSize = 14f * density
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                "No data available for visualization",
+                size.width / 2f,
+                size.height / 2f,
+                paint
+            )
+            return@Canvas
+        }
+        
+        val width = size.width
+        val canvasHeight = size.height
+        
+        // Find max values for scaling
+        val maxCsiValue = features.maxOf { it.csiFeature }.coerceAtLeast(0.01f)
+        val maxBitrateValue = features.maxOf { it.bitrateFeature }.coerceAtLeast(1)
+        
+        // Get the max timestamp for scaling
+        val maxTimestamp = features.maxOf { it.timestamp }
+        
+        // Add padding to avoid drawing on the edges
+        val padding = 16f
+        val drawWidth = width - 2 * padding
+        val drawHeight = canvasHeight - 2 * padding
+        
+        // Draw horizontal center line (separator)
+        drawLine(
+            color = Color.Gray.copy(alpha =.2f),
+            start = Offset(padding, canvasHeight / 2),
+            end = Offset(width - padding, canvasHeight / 2),
+            strokeWidth = 1f
+        )
+        
+        // First, draw CSI and bitrate lines
+        // CSI line (top half)
+        for (i in 1 until features.size) {
+            val prev = features[i-1]
+            val curr = features[i]
+            
+            val x1 = padding + (prev.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y1 = padding + (drawHeight / 2) * (1 - prev.csiFeature / maxCsiValue)
+            
+            val x2 = padding + (curr.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y2 = padding + (drawHeight / 2) * (1 - curr.csiFeature / maxCsiValue)
+            
+            drawLine(
+                color = primaryColor,
+                start = Offset(x1, y1),
+                end = Offset(x2, y2),
+                strokeWidth = 2f,
+                cap = StrokeCap.Round
+            )
+        }
+        
+        // Bitrate line (bottom half)
+        for (i in 1 until features.size) {
+            val prev = features[i-1]
+            val curr = features[i]
+            
+            val x1 = padding + (prev.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y1 = canvasHeight / 2 + padding + (drawHeight / 2) * (prev.bitrateFeature.toFloat() / maxBitrateValue)
+            
+            val x2 = padding + (curr.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y2 = canvasHeight / 2 + padding + (drawHeight / 2) * (curr.bitrateFeature.toFloat() / maxBitrateValue)
+            
+            drawLine(
+                color = secondaryColor,
+                start = Offset(x1, y1),
+                end = Offset(x2, y2),
+                strokeWidth = 2f,
+                cap = StrokeCap.Round
+            )
+        }
+        
+        // Now highlight CSI change points
+        for (timestamp in classificationResult.csiChangePoints) {
+            // Find matching feature
+            val closestFeature = features.minByOrNull { 
+                Math.abs(it.timestamp - timestamp) 
+            } ?: continue
+            
+            val x = padding + (closestFeature.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y = padding + (drawHeight / 2) * (1 - closestFeature.csiFeature / maxCsiValue)
+            
+            // Draw a circle to highlight the change point
+            drawCircle(
+                color = primaryColor.copy(alpha = 0.7f),
+                radius = 5f,
+                center = Offset(x, y)
+            )
+        }
+        
+        // Highlight bitrate change points
+        for (timestamp in classificationResult.bitrateChangePoints) {
+            // Find matching feature
+            val closestFeature = features.minByOrNull { 
+                Math.abs(it.timestamp - timestamp) 
+            } ?: continue
+            
+            val x = padding + (closestFeature.timestamp / maxTimestamp * drawWidth).toFloat()
+            val y = canvasHeight / 2 + padding + (drawHeight / 2) * (closestFeature.bitrateFeature.toFloat() / maxBitrateValue)
+            
+            // Draw a circle to highlight the change point
+            drawCircle(
+                color = secondaryColor.copy(alpha = 0.7f),
+                radius = 5f,
+                center = Offset(x, y)
+            )
+        }
+        
+        // Finally, highlight correlated change points
+        for (timestamp in classificationResult.detectionPoints) {
+            // Find closest feature to this timestamp
+            val closestIndex = features.indices.minByOrNull { 
+                Math.abs(features[it].timestamp - timestamp) 
+            } ?: continue
+            
+            val closestFeature = features[closestIndex]
+            
+            val x = padding + (closestFeature.timestamp / maxTimestamp * drawWidth).toFloat()
+            
+            // Draw a vertical line connecting the CSI and bitrate points
+            drawLine(
+                color = correlationColor,
+                start = Offset(x, padding),
+                end = Offset(x, canvasHeight - padding),
+                strokeWidth = 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+            )
+            
+            // Draw error markers at both CSI and bitrate positions
+            val yTop = padding + (drawHeight / 2) * (1 - closestFeature.csiFeature / maxCsiValue)
+            val yBottom = canvasHeight / 2 + padding + (drawHeight / 2) * (closestFeature.bitrateFeature.toFloat() / maxBitrateValue)
+            
+            // CSI correlation point
+            drawCircle(
+                color = correlationColor,
+                radius = 8f,
+                center = Offset(x, yTop)
+            )
+            
+            // Bitrate correlation point
+            drawCircle(
+                color = correlationColor,
+                radius = 8f,
+                center = Offset(x, yBottom)
+            )
+        }
+        
+        // Draw legend
+        val legendPaint = android.graphics.Paint().apply {
+            textAlign = android.graphics.Paint.Align.LEFT
+            textSize = 10f * density
+        }
+        
+        // CSI legend
+        legendPaint.color = primaryColor.toArgb()
+        drawContext.canvas.nativeCanvas.drawText("CSI", padding, padding - 2, legendPaint)
+        
+        // Bitrate legend
+        legendPaint.color = secondaryColor.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(
+            "Bitrate", 
+            padding, 
+            canvasHeight / 2 + padding - 2, 
+            legendPaint
+        )
+        
+        // Correlation legend
+        legendPaint.color = correlationColor.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(
+            "Correlated Changes", 
+            width - 120 * density, 
+            padding - 2, 
+            legendPaint
+        )
+    }
 }
 
 @Preview(showBackground = true, name = "DetectSpyCamScreen Preview")

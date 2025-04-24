@@ -560,6 +560,15 @@ class SpyCameraDetector private constructor(private val etherSrc: String) {
         log("Detector has been completely reset")
     }
 
+    // Add public methods to update processing stage and progress
+    fun updateProcessingStage(stage: String) {
+        _processingStage.value = stage
+    }
+    
+    fun updateProcessingProgress(progress: Float) {
+        _processingProgress.value = progress
+    }
+
     private fun log(message: String) {
         if (_loggingEnabled.value) {
             Log.d(TAG, message)

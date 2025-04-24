@@ -13,6 +13,10 @@ navigationCompose = "2.8.7"
 appcompat = "1.7.0"
 roomRuntimeAndroid = "2.7.0"
 
+tensorflow-lite-task = "0.4.2"
+tensorflow-lite = "0.0.0-nightly-SNAPSHOT"
+tensorflow-lite-support = "0.0.0-nightly-SNAPSHOT"
+
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -33,8 +37,18 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-room-runtime-android = { group = "androidx.room", name = "room-runtime-android", version.ref = "roomRuntimeAndroid" }
 
+tensorflow-lite = { module = "org.tensorflow:tensorflow-lite", version = "2.17.0" }
+tensorflow-lite-support = { module = "org.tensorflow:tensorflow-lite-support", version = "0.5.0" }
+tensorflow-lite-gpu = { module = "org.tensorflow:tensorflow-lite-gpu", version.ref = "tensorflow-lite" }
+tensorflow-lite-task-vision = { module = "org.tensorflow:tensorflow-lite-task-vision", version.ref = "tensorflow-lite-task" }
+tensorflow-lite-task-text = { module = "org.tensorflow:tensorflow-lite-task-text", version.ref = "tensorflow-lite-task" }
+
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 
+[bundles]
+tensorflow-lite-basic = ["tensorflow-lite", "tensorflow-lite-support"]
+tensorflow-lite-full = ["tensorflow-lite", "tensorflow-lite-support", "tensorflow-lite-gpu", "tensorflow-lite-task-vision", "tensorflow-lite-task-text"]

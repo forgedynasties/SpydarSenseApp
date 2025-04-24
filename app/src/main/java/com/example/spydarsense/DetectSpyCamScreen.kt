@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.PathEffect
 import com.example.spydarsense.backend.SpyCamClassifier
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,8 +77,25 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
     var classificationResult by remember { mutableStateOf<SpyCamClassifier.ClassificationResult?>(null) }
     var showResultDialog by remember { mutableStateOf(false) }
     
-    // Create classifier instance
+    // Create classifier instance with context
+    // Get context outside remember block
+    val context = LocalContext.current
+// Create classifier without passing context in remember block
     val classifier = remember { SpyCamClassifier() }
+
+    // Create error state for TFLite initialization
+    var tfLiteInitError by remember { mutableStateOf<String?>(null) }
+
+    // Initialize with context using LaunchedEffect with proper error handling
+    LaunchedEffect(Unit) {
+        try {
+            classifier.initializeWithContext(context)
+        } catch (e: Exception) {
+            Log.e("DetectSpyCamScreen", "Error initializing TFLite: ${e.message}")
+            tfLiteInitError = "TensorFlow Lite initialization failed: ${e.message}"
+            // App will still work using the fallback detection method
+        }
+    }
 
     // Clear previous detection data when this screen is first shown
     LaunchedEffect(sessionId) {
@@ -616,7 +634,7 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                     // Small delay for UI feedback
                                     delay(500)
                                     
-                                    // Run the classifier
+                                    // Run the classifier (now with TFLite model if available)
                                     val result = classifier.analyze(alignedFeatures)
                                     classificationResult = result
                                     
@@ -1352,6 +1370,16 @@ fun ClassificationResultCard(
                 BulletText(
                     text = "${result.detectionPoints.size} correlated changes detected",
                     textColor = textColor
+                )
+            }
+            
+            // Add this somewhere in the card content:
+            if (result.modelUsed != "N/A") {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Classification method: ${result.modelUsed}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor.copy(alpha = 0.7f)
                 )
             }
             

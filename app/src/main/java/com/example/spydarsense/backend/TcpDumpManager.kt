@@ -24,37 +24,43 @@ class TcpdumpManager(
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning
     
-    // Stream file paths for continuous capture
-    private var csiStreamFile: String? = null
-    private var brStreamFile: String? = null
+    // Capture file paths
+    private var csiCaptureFile: String? = null
+    private var brCaptureFile: String? = null
     
-    // Processing job for monitoring stream file sizes
-    private var streamMonitorJob: Job? = null
-
+    // Add a capture completion state
+    private val _captureCompleted = MutableStateFlow(false)
+    val captureCompleted: StateFlow<Boolean> = _captureCompleted
+    
     // Add a trigger for processing
     private val _processingTrigger = MutableStateFlow(0L)
     val processingTrigger: StateFlow<Long> = _processingTrigger
     
-    // Add functions to get the current streaming files
-    fun getCurrentCsiFile(): String? = csiStreamFile
-    fun getCurrentBrFile(): String? = brStreamFile
+    // Add functions to get the current capture files
+    fun getCurrentCsiFile(): String? = csiCaptureFile
+    fun getCurrentBrFile(): String? = brCaptureFile
 
     init {
         File(outputDir).mkdirs()
     }
 
-    private fun runTcpdump(interf: String, filter: String, outputFile: String, preloadLib: String? = null) {
+    private fun runTcpdump(interf: String, filter: String, outputFile: String, captureSeconds: Int = 10, preloadLib: String? = null) {
+        // Use timeout command to limit capture duration
         val command = if (preloadLib != null) {
-            "LD_PRELOAD=$preloadLib tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
+            "LD_PRELOAD=$preloadLib timeout $captureSeconds tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
         } else {
-            "tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
+            "timeout $captureSeconds tcpdump -i $interf $filter -s0 -evvv -xx -w $outputFile"
         }
-        Log.d("TcpdumpManager", "Starting continuous tcpdump: $outputFile")
+        
+        Log.d("TcpdumpManager", "Starting time-limited tcpdump capture for $captureSeconds seconds: $outputFile")
         shellExecutor.execute(command) { output, exitCode ->
-            if (exitCode == 0) {
-                Log.d("TcpdumpManager", "tcpdump started successfully: $output")
+            if (exitCode == 0 || exitCode == 124) { // 124 is timeout's exit code for normal termination
+                Log.d("TcpdumpManager", "tcpdump capture completed: $output (exit code: $exitCode)")
+                
+                // Check if both captures have completed
+                checkCaptureCompletion()
             } else {
-                Log.e("TcpdumpManager", "tcpdump failed to start: $output")
+                Log.e("TcpdumpManager", "tcpdump capture failed: $output (exit code: $exitCode)")
             }
         }
     }
@@ -70,74 +76,67 @@ class TcpdumpManager(
         }
     }
 
-    fun startCaptures() {
+    // Track completion of individual captures
+    private var csiCaptureComplete = false
+    private var brCaptureComplete = false
+    
+    private fun checkCaptureCompletion() {
+        CoroutineScope(Dispatchers.Main).launch {
+            if (csiCaptureFile != null && brCaptureFile != null) {
+                val csiFileExists = File(csiCaptureFile!!).exists() && File(csiCaptureFile!!).length() > 0
+                val brFileExists = File(brCaptureFile!!).exists() && File(brCaptureFile!!).length() > 0
+                
+                if (csiFileExists && brFileExists) {
+                    Log.d("TcpdumpManager", "Both captures completed successfully")
+                    _captureCompleted.value = true
+                    _isRunning.value = false
+                    
+                    // Trigger processing after captures complete
+                    _processingTrigger.value = System.currentTimeMillis()
+                    Log.d("TcpdumpManager", "Triggering data processing after capture completion")
+                }
+            }
+        }
+    }
+
+    fun startCaptures(captureSeconds: Int = 10) {
         if (_isRunning.value) {
             Log.d("TcpdumpManager", "Captures already running, ignoring start request")
             return
         }
 
         _isRunning.value = true
+        _captureCompleted.value = false
+        csiCaptureComplete = false
+        brCaptureComplete = false
         
-        // Generate unique file names for continuous streams
+        // Generate unique file names for captures
         val timestamp = dateFormat.format(Date())
-        csiStreamFile = "$outputDir/csi_stream_$timestamp.pcap"
-        brStreamFile = "$outputDir/cam_stream_$timestamp.pcap"
+        csiCaptureFile = "$outputDir/csi_capture_$timestamp.pcap"
+        brCaptureFile = "$outputDir/cam_capture_$timestamp.pcap"
         
-        // Start continuous CSI capture
-        runTcpdump("wlan0", "dst port 5500", csiStreamFile!!)
+        // Start time-limited CSI capture
+        runTcpdump("wlan0", "dst port 5500", csiCaptureFile!!, captureSeconds)
         
-        // Start continuous bitrate capture
-        runTcpdump("wlan0", "ether src $etherSrc", brStreamFile!!, "libnexmon.so")
+        // Start time-limited bitrate capture
+        runTcpdump("wlan0", "ether src $etherSrc", brCaptureFile!!, captureSeconds, "libnexmon.so")
         
-        // Update directory lists immediately with the stream files
-        _csiDirs.value = _csiDirs.value + csiStreamFile!!
-        _brDirs.value = _brDirs.value + brStreamFile!!
+        // Update directory lists immediately with the capture files
+        _csiDirs.value = _csiDirs.value + csiCaptureFile!!
+        _brDirs.value = _brDirs.value + brCaptureFile!!
         
-        // IMPORTANT: Trigger initial processing immediately
-        _processingTrigger.value = System.currentTimeMillis()
+        Log.d("TcpdumpManager", "Started captures for $captureSeconds seconds")
         
-        // Start monitoring job to check file growth and trigger processing
-        streamMonitorJob = CoroutineScope(Dispatchers.IO).launch {
-            var lastCsiSize = 0L
-            var lastBrSize = 0L
-            var forceTriggerCounter = 0
+        // Monitor for completion
+        CoroutineScope(Dispatchers.IO).launch {
+            // Add a safety timeout that's slightly longer than the capture time
+            delay((captureSeconds * 1000 + 2000).toLong())
             
-            while (isActive && _isRunning.value) {
-                delay(300) // Check more frequently (300ms)
-                
-                var shouldTriggerProcessing = false
-                forceTriggerCounter++
-                
-                // Force trigger processing every ~3 seconds even if files don't appear to grow
-                if (forceTriggerCounter >= 10) {
-                    shouldTriggerProcessing = true
-                    forceTriggerCounter = 0
-                    Log.d("TcpdumpManager", "Forcing data processing trigger (periodic)")
-                }
-                
-                csiStreamFile?.let { file ->
-                    val currentSize = File(file).length()
-                    if (currentSize > lastCsiSize + 10) { // Lower threshold to 10 bytes for more sensitivity
-                        Log.d("TcpdumpManager", "CSI stream file has grown: $currentSize bytes (+${currentSize - lastCsiSize})")
-                        lastCsiSize = currentSize
-                        shouldTriggerProcessing = true
-                    }
-                }
-                
-                brStreamFile?.let { file ->
-                    val currentSize = File(file).length()
-                    if (currentSize > lastBrSize + 10) { // Lower threshold to 10 bytes for more sensitivity
-                        Log.d("TcpdumpManager", "Bitrate stream file has grown: $currentSize bytes (+${currentSize - lastBrSize})")
-                        lastBrSize = currentSize
-                        shouldTriggerProcessing = true
-                    }
-                }
-                
-                if (shouldTriggerProcessing) {
-                    // Trigger processing by emitting a new timestamp
-                    _processingTrigger.value = System.currentTimeMillis()
-                    Log.d("TcpdumpManager", "Triggering data processing")
-                }
+            if (_isRunning.value) {
+                Log.d("TcpdumpManager", "Safety timeout reached, ensuring captures are complete")
+                _captureCompleted.value = true
+                _isRunning.value = false
+                _processingTrigger.value = System.currentTimeMillis()
             }
         }
     }
@@ -149,8 +148,43 @@ class TcpdumpManager(
         
         _isRunning.value = false
         stopTcpdump()
-        streamMonitorJob?.cancel()
+        
+        // Wait a moment to make sure processes are actually killed
+        Thread.sleep(100)
+        
+        // Check capture completion
+        checkCaptureCompletion()
         
         Log.d("TcpdumpManager", "Captures stopped")
+    }
+
+    // Add a new method to reset capture files explicitly
+    fun resetCaptureFiles() {
+        csiCaptureFile = null
+        brCaptureFile = null
+        _captureCompleted.value = false
+        Log.d("TcpdumpManager", "Capture files reset")
+    }
+
+    // Add a new method to clear all data
+    fun clearData() {
+        stopCaptures()
+        
+        // Clear the directory lists
+        _csiDirs.value = emptyList()
+        _brDirs.value = emptyList()
+        
+        // Reset the trigger and completion state
+        _processingTrigger.value = 0L
+        _captureCompleted.value = false
+        
+        // Reset capture files
+        resetCaptureFiles()
+        
+        // Force kill any lingering processes
+        val command = "pkill tcpdump"
+        shellExecutor.execute(command) { _, _ -> }
+        
+        Log.d("TcpdumpManager", "All data cleared")
     }
 }

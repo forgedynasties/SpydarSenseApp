@@ -48,28 +48,42 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.example.spydarsense.backend.WifiScanner
+import androidx.lifecycle.lifecycleScope
+import com.example.spydarsense.backend.SpyCameraDetector
 import com.example.spydarsense.components.ThemeToggle
 import com.example.spydarsense.data.AP
+import com.example.spydarsense.data.Station
+import com.example.spydarsense.repository.WifiScanRepository
 import com.example.spydarsense.ui.theme.rememberThemeState
+import com.example.spydarsense.components.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.example.spydarsense.backend.ShellExecutor
 
 class MainActivity : ComponentActivity() {
 
@@ -91,122 +105,186 @@ class MainActivity : ComponentActivity() {
         ) {
             requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
-        enableEdgeToEdge()
 
-        // Initialize the WifiScanner
-        val wifiScanner = WifiScanner.getInstance()
+        // Request WRITE_EXTERNAL_STORAGE permission as well for airodump output
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+
+        enableEdgeToEdge()
 
         setContent {
             val isDarkTheme = rememberThemeState()
-            
+
             SpydarSenseTheme(darkTheme = isDarkTheme.value) {
                 val navController = rememberNavController()
-                val setup = true // Set to true to show the setup screen
+                // Always start with the home screen
+                val setup = false 
 
-                NavHost(navController = navController, startDestination = if (setup) "setup" else "home") {
-                    composable("setup") {
-                        SetupScreen(navController)
+                // Track current screen for lifecycle management
+                var currentScreen by remember { mutableStateOf("") }
+                
+                // Listen for navigation changes to update current screen
+                LaunchedEffect(navController) {
+                    navController.currentBackStackEntryFlow.collect { entry ->
+                        val previousScreen = currentScreen
+                        val route = entry.destination.route ?: ""
+                        currentScreen = route
+                        
+                        // Stop scanning when leaving the home screen
+                        if (previousScreen == "home" && currentScreen != "home") {
+                            WifiScanRepository.getInstance().stopScan()
+                        }
+                        
+                        // If navigating to a detect spy cam screen, force reset detector
+                        // This ensures a clean slate for each detection session
+                        if (route.startsWith("detectSpyCam") && previousScreen.startsWith("detectSpyCam")) {
+                            // Give time for previous session to fully clean up
+                            delay(300)
+                            // Reset detector for new session
+                            SpyCameraDetector.getInstance().forceReset()
+                        }
                     }
+                }
+
+                NavHost(navController = navController, startDestination = "home") {
+
                     composable("home") {
-                        HomeScreen(navController, wifiScanner)
+                        HomeScreen(navController)
                     }
-                    composable("detectSpyCam/{essid}/{mac}/{pwr}/{ch}") { backStackEntry ->
-                        val essid = backStackEntry.arguments?.getString("essid") ?: ""
-                        val mac = backStackEntry.arguments?.getString("mac") ?: ""
+                    // Updated route to include sessionId for isolation
+                    composable("detectSpyCam/{sessionId}/{stationMac}/{apMac}/{pwr}/{ch}") { backStackEntry ->
+                        val sessionId = backStackEntry.arguments?.getString("sessionId") ?: "${System.currentTimeMillis()}"
+                        val stationMac = backStackEntry.arguments?.getString("stationMac") ?: ""
+                        val apMac = backStackEntry.arguments?.getString("apMac") ?: ""
                         val pwr = backStackEntry.arguments?.getString("pwr")?.toIntOrNull() ?: 0
                         val ch = backStackEntry.arguments?.getString("ch")?.toIntOrNull() ?: 0
-                        DetectSpyCamScreen(essid, mac, pwr, ch)
+                        DetectSpyCamScreen(sessionId = sessionId, stationMac = stationMac, apMac = apMac, pwr = pwr, ch = ch)
                     }
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Stop scanning when the app is destroyed
+        WifiScanRepository.getInstance().stopScan()
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScanner.getInstance()) {
-    // Get APs from WifiScanner instead of hardcoded list
-    val filteredAPs = wifiScanner.filteredAPs.collectAsState().value
-    val isScanning = wifiScanner.isScanning.collectAsState().value
-    val statusMessage = wifiScanner.statusMessage.collectAsState().value
-    
-    // State for filter dialog
-    val showFilterDialog = remember { mutableStateOf(false) }
-    var minSignal by remember { mutableStateOf(-90) }
-    var selectedChannel by remember { mutableStateOf<Int?>(null) }
-    var showSavedOnly by remember { mutableStateOf(false) }
-    
-    // State to track the number of APs to display
-    val displayedAPsCount = remember { mutableStateOf(3) }
-    var isRefreshing by remember { mutableStateOf(false) }
-    
-    // Calculate if we're showing all APs
-    val isShowingAll = displayedAPsCount.value >= filteredAPs.size
+fun HomeScreen(navController: NavController) {
+    // Get the repository instance
+    val repository = WifiScanRepository.getInstance()
 
-    // Start scanning when the screen is shown
-    LaunchedEffect(Unit) {
-        if (!isScanning) {
-            wifiScanner.startScanning()
+    // Monitor mode state
+    var isMonitorModeEnabled by remember { mutableStateOf(false) }
+    var isToggling by remember { mutableStateOf(false) }
+    var monitorModeOutput by remember { mutableStateOf("") }
+    val shellExecutor = remember { ShellExecutor() }
+
+    // Collect the APs from the repository with proper initialization
+    val allScannedAPs = repository.allAccessPoints.collectAsState(initial = emptyList()).value
+    val stations = repository.stations.collectAsState(initial = emptyList()).value
+    val isScanning = repository.isScanning.collectAsState(initial = false).value
+    val isRefreshing = repository.isRefreshing.collectAsState(initial = false).value
+
+    // State to track the number of APs to display
+    val displayedAPsCount = remember { mutableStateOf(5) }
+
+    // Calculate if we're showing all APs
+    val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
+
+    // Start and stop scanning based on monitor mode state
+    DisposableEffect(isMonitorModeEnabled) {
+        // Only start scanning when monitor mode is enabled
+        if (isMonitorModeEnabled) {
+            repository.startScan()
+        } else {
+            repository.stopScan()
+        }
+        
+        // Stop scanning when the HomeScreen is no longer active
+        onDispose {
+            repository.stopScan()
         }
     }
-    
-    // Show filter dialog if needed
-    if (showFilterDialog.value) {
-        FilterDialog(
-            currentMinSignal = minSignal,
-            currentChannel = selectedChannel,
-            showSavedOnly = showSavedOnly,
-            onDismiss = { showFilterDialog.value = false },
-            onApply = { newMinSignal, newChannel, newShowSavedOnly ->
-                minSignal = newMinSignal
-                selectedChannel = newChannel
-                showSavedOnly = newShowSavedOnly
-                
-                // Apply the new filters
-                wifiScanner.setFilterOptions(
-                    minSignal = newMinSignal,
-                    channel = newChannel,
-                    onlySavedNetworks = newShowSavedOnly
-                )
-                
-                showFilterDialog.value = false
-            }
-        )
+
+    // Create a map of MAC to AP for quick lookup of AP details
+    val apMap = remember(allScannedAPs) {
+        allScannedAPs.associateBy { AP.normalizeMac(it.mac) }
     }
+
+    // Filter stations to only include associated stations
+    val filteredStations = remember(stations, apMap) {
+        stations.filter { station -> 
+            // Only include associated stations
+            station.bssid != "(not associated)" && 
+            apMap.containsKey(AP.normalizeMac(station.bssid))
+        }
+    }
+
+    // Function to toggle monitor mode
+    val toggleMonitorMode = {
+        isToggling = true
+        if (isMonitorModeEnabled) {
+            // Command to disable monitor mode
+            shellExecutor.execute("nexutil -Iwlan0 -m0 && nexutil -m") { output, exitCode ->
+                if (exitCode == 0 && output.contains("monitor: 0")) {
+                    isMonitorModeEnabled = false
+                    monitorModeOutput = "Monitor mode disabled"
+                } else if (output.isNotEmpty()) {
+                    monitorModeOutput = "Error: $output"
+                }
+                isToggling = false
+            }
+        } else {
+            // Command to enable monitor mode
+            shellExecutor.execute("ifconfig wlan0 up && nexutil -Iwlan0 -m1 && nexutil -m") { output, exitCode ->
+                if (exitCode == 0 && output.contains("monitor: 1")) {
+                    isMonitorModeEnabled = true
+                    monitorModeOutput = "Monitor mode enabled"
+                } else if (output.isNotEmpty()) {
+                    monitorModeOutput = "Error: $output"
+                }
+                isToggling = false
+            }
+        }
+    }
+
+    // State for tracking which dropdown is expanded
+    val savedDevicesExpanded = remember { mutableStateOf(false) }
+    val scannedDevicesExpanded = remember { mutableStateOf(true) } // Default open
+    val accessPointsExpanded = remember { mutableStateOf(true) } // Default open
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Spydar Sense",
-                        fontWeight = FontWeight.Medium
-                    ) 
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    ThemeToggle()
-                }
-            )
+            AppTopBar(title = "Spydar Sense")
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { 
-                    // Force refresh scan when button is clicked
-                    wifiScanner.forceRefreshScan()
-                },
-                shape = CircleShape,
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Refresh Scan"
-                )
+            if (isMonitorModeEnabled) {
+                FloatingActionButton(
+                    onClick = {
+                        // Manually trigger a refresh
+                        if (!isRefreshing) {
+                            repository.forceRefreshScan()
+                        }
+                    },
+                    shape = CircleShape,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Scan for APs"
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -215,114 +293,235 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Column(
+            // Replace Column with LazyColumn to make the entire content scrollable
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.Top,
-                horizontalAlignment = Alignment.CenterHorizontally
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
             ) {
-                // Summary card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 16.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                    ),
-                    elevation = CardDefaults.cardElevation(
-                        defaultElevation = 0.dp
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // Monitor Mode Toggle Card
+                item {
+                    AppCard(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             Text(
-                                text = "${filteredAPs.size}",
-                                style = MaterialTheme.typography.headlineMedium,
+                                text = "Monitor Mode",
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // Status text
                             Text(
-                                text = statusMessage,
+                                text = if (isMonitorModeEnabled) "Active" else "Inactive",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                color = if (isMonitorModeEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                             )
+                            
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            // Toggle button
+                            Button(
+                                onClick = { toggleMonitorMode() },
+                                enabled = !isToggling,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isMonitorModeEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isToggling) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(if (isMonitorModeEnabled) "Disable Monitor Mode" else "Enable Monitor Mode")
+                            }
+                            
+                            // Show the output/error message if any
+                            if (monitorModeOutput.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = monitorModeOutput,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (monitorModeOutput.startsWith("Error")) 
+                                        MaterialTheme.colorScheme.error 
+                                    else 
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            
+                            // Hint message when monitor mode is disabled
+                            if (!isMonitorModeEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "⚠️ Enable Monitor Mode to scan for networks and detect spy cameras",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
-                        
-                        OutlinedButton(
-                            onClick = { showFilterDialog.value = true },
-                            shape = RoundedCornerShape(8.dp)
+                    }
+                }
+
+                // Summary card - show only when monitor mode is enabled or with reduced opacity
+                item {
+                    AppCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(if (isMonitorModeEnabled) 1f else 0.5f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("⏳")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Devices count
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = if (isMonitorModeEnabled) "${filteredStations.size}" else "0",
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Devices",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+
+                            // Show scanning indicator only when monitor mode is enabled
+                            if (isMonitorModeEnabled && isRefreshing) {
+                                Text(
+                                    "Scanning...",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Scanned Devices (Stations) Section
+                item {
+                    ExpandableSection(
+                        title = "Scanned Devices",
+                        expanded = scannedDevicesExpanded.value && isMonitorModeEnabled,
+                        onToggle = { if (isMonitorModeEnabled) scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
+                        count = if (isMonitorModeEnabled) filteredStations.size else 0
+                    ) {
+                        if (!isMonitorModeEnabled) {
+                            Text(
+                                text = "Monitor mode is disabled. Enable it to scan for devices.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else if (filteredStations.isEmpty()) {
+                            Text(
+                                text = "No devices detected",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                filteredStations.forEach { station ->
+                                    val associatedAP = apMap[AP.normalizeMac(station.bssid)]
+                                    StationCard(
+                                        station = station,
+                                        apEssid = associatedAP?.essid ?: "Unknown",
+                                        apChannel = associatedAP?.ch ?: 0,
+                                        navController = navController
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 
-                // AP list title
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Available Networks",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    
-                    TextButton(
-                        onClick = { 
-                            if (isShowingAll) {
-                                displayedAPsCount.value = 3  // Reset to initial count
-                            } else {
-                                displayedAPsCount.value = filteredAPs.size  // Show all
+                // Access Points Section
+                item {
+                    ExpandableSection(
+                        title = "Access Points",
+                        expanded = accessPointsExpanded.value && isMonitorModeEnabled,
+                        onToggle = { if (isMonitorModeEnabled) accessPointsExpanded.value = !accessPointsExpanded.value },
+                        count = if (isMonitorModeEnabled) allScannedAPs.size else 0
+                    ) {
+                        if (!isMonitorModeEnabled) {
+                            Text(
+                                text = "Monitor mode is disabled. Enable it to scan for networks.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else if (allScannedAPs.isEmpty()) {
+                            Text(
+                                "No networks found",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                allScannedAPs.take(displayedAPsCount.value).forEach { ap ->
+                                    APCard(ap, navController)
+                                }
+                                
+                                if (allScannedAPs.size > displayedAPsCount.value) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedAPsCount.value = allScannedAPs.size  // Show all
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show All")
+                                    }
+                                } else if (displayedAPsCount.value > 5) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedAPsCount.value = 5  // Reset to initial count
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show Less")
+                                    }
+                                }
                             }
                         }
-                    ) {
-                        Text(if (isShowingAll) "Show Less" else "Show All")
                     }
                 }
-
-                // AP list with empty state
-                if (filteredAPs.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Text("No networks found")
-                            OutlinedButton(
-                                onClick = { wifiScanner.forceRefreshScan() }
-                            ) {
-                                Text("Refresh Scan")
-                            }
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = PaddingValues(bottom = 16.dp)
-                    ) {
-                        items(filteredAPs.take(displayedAPsCount.value)) { ap -> 
-                            APCard(ap, navController)
-                        }
-                    }
+                
+                // Add some padding at the bottom for better UX
+                item {
+                    Spacer(modifier = Modifier.height(80.dp))
                 }
             }
         }
@@ -330,94 +529,82 @@ fun HomeScreen(navController: NavController, wifiScanner: WifiScanner = WifiScan
 }
 
 @Composable
-fun FilterDialog(
-    currentMinSignal: Int,
-    currentChannel: Int?,
-    showSavedOnly: Boolean,
-    onDismiss: () -> Unit,
-    onApply: (minSignal: Int, channel: Int?, showSavedOnly: Boolean) -> Unit
+fun ExpandableSection(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    count: Int,
+    extraContent: @Composable (() -> Unit)? = null,
+    content: @Composable () -> Unit
 ) {
-    var minSignal by remember { mutableStateOf(currentMinSignal) }
-    var selectedChannel by remember { mutableStateOf(currentChannel) }
-    var savedOnly by remember { mutableStateOf(showSavedOnly) }
-    
-    val availableChannels = listOf(
-        null, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 36, 40, 44, 48
-    )
-    
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Filter Networks") },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+    AppCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // Header section with toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle() }
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Min signal strength
-                Text("Minimum Signal Strength: ${minSignal} dBm")
-                androidx.compose.material3.Slider(
-                    value = minSignal.toFloat(),
-                    onValueChange = { minSignal = it.toInt() },
-                    valueRange = -100f..-30f,
-                    steps = 14
-                )
-                
-                // Channel selector
-                Text("Channel:")
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(availableChannels) { channel ->
-                        FilterChip(
-                            selected = channel == selectedChannel,
-                            onClick = { selectedChannel = channel },
-                            label = { Text(channel?.toString() ?: "All") }
-                        )
-                    }
-                }
-                
-                // Saved networks only
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Checkbox(
-                        checked = savedOnly,
-                        onCheckedChange = { savedOnly = it }
+                    Text(
+                        text = "$title ($count)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    Text("Show saved networks only")
+                    
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowRight,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .rotate(if (expanded) 90f else 0f),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
+                
+                extraContent?.invoke()
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { 
-                    onApply(minSignal, selectedChannel, savedOnly)
+            
+            // Content section
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    content()
                 }
-            ) {
-                Text("Apply")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
             }
         }
-    )
+    }
 }
 
 @Composable
-fun APCard(ap: AP, navController: NavController) {
+fun StationCard(station: Station, apEssid: String, apChannel: Int, navController: NavController) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                // Pass only available fields
-                navController.navigate("detectSpyCam/${ap.essid}/${ap.mac}/0/${ap.ch}")
+                // Generate a unique session ID for this detection session
+                val sessionId = "${System.currentTimeMillis()}-${station.mac}"
+                // Navigate to spy cam detector with station info
+                navController.navigate("detectSpyCam/$sessionId/${station.mac}/${station.bssid}/${station.power}/${apChannel}")
             },
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 2.dp,
-            pressedElevation = 0.dp
-        )
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+        ),
+        shape = RoundedCornerShape(8.dp)
     ) {
         Row(
             modifier = Modifier
@@ -425,7 +612,63 @@ fun APCard(ap: AP, navController: NavController) {
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Network details
+            // Device details
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+            ) {
+                Text(
+                    text = station.mac,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                
+                Text(
+                    text = "AP: ${if (apEssid != "null") apEssid else station.bssid}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "CH $apChannel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "${station.power} dBm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Arrow indicator
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = "Open",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+fun APCard(ap: AP, navController: NavController) {
+    // Remove clickable modifier and navigation logic since APs shouldn't support detection
+    AppCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Network details - removed the circular indicator
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -443,13 +686,22 @@ fun APCard(ap: AP, navController: NavController) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(
-                    text = "CH ${ap.ch}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "CH ${ap.ch}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "${ap.pwr} dBm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
             }
-            
+
             // Arrow indicator
             Icon(
                 imageVector = Icons.Default.KeyboardArrowRight,

@@ -25,6 +25,7 @@ class ShellExecutor {
                 command.contains("tcpdump") -> "TCPDUMP"
                 command.contains("nexutil") -> "NEXUTIL"
                 command.contains("makecsiparams") -> "CSI_PARAMS"
+                command.contains("airodump-ng") -> "AIRODUMP"
                 else -> "SHELL"
             }
             
@@ -39,7 +40,8 @@ class ShellExecutor {
                 try {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
-                        //Log.d("ShellExecutor", "[$commandType] Output: $line")
+                        Log.d("ShellExecutor", "[$commandType] Output: $line")
+
                         outputBuffer.append(line).append("\n")
                         callback(line, 0) // Stream output line by line
                         line = reader.readLine()
@@ -65,7 +67,7 @@ class ShellExecutor {
                     var line: String? = reader.readLine()
                     while (!isStopped && line != null) {
                         // Add command context to error message
-                        Log.e("ShellExecutor", "[$commandType] Error: $line")
+                        //Log.e("ShellExecutor", "[$commandType] Error: $line")
                         errorBuffer.append(line).append("\n")
                         
                         // Don't call callback for every error line - we'll collect them

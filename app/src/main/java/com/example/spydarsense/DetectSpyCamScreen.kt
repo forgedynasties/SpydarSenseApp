@@ -192,6 +192,8 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        Spacer(modifier = Modifier.height(4.dp))
+
                         Text(
                             text = "Target Device",
                             style = MaterialTheme.typography.titleMedium,
@@ -499,27 +501,11 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                 }
                             }
                         } else if (captureCompleted && alignedFeatures.isNotEmpty()) {
-                            // Raw Bitrate Data Visualization
-                            if (bitrateTimeline.isNotEmpty()) {
-                                Text(
-                                    text = "Raw Bitrate Data",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                                
-                                BitrateTimelineChart(
-                                    title = "",
-                                    data = bitrateTimeline.toList(),
-                                    height = 150.dp
-                                )
-                                
-                                Divider(modifier = Modifier.padding(vertical = 8.dp))
-                            }
+
                             
                             // Aligned Features Visualization
                             Text(
-                                text = "CSI and Bitrate Combined View",
+                                text = "Extracted Features",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Medium,
                                 color = MaterialTheme.colorScheme.primary
@@ -531,38 +517,9 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                 height = 200.dp
                             )
                             
-                            // Add textual representation of features
                             Spacer(modifier = Modifier.height(8.dp))
                             
-                            Text(
-                                text = "Feature Values",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            
-                            // Display feature data in a scrollable row
-                            LazyRow(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(alignedFeatures.take(15)) { feature ->
-                                    FeatureDataCard(feature = feature)
-                                }
-                            }
-                            
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Text(
-                                    text = "Swipe to see more data points →",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
+
                         } else {
                             EmptyDataIndicator(
                                 text = if (captureCompleted) 

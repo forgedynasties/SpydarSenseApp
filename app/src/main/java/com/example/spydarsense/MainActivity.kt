@@ -195,11 +195,9 @@ fun HomeScreen(navController: NavController) {
     val isScanning = repository.isScanning.collectAsState(initial = false).value
     val isRefreshing = repository.isRefreshing.collectAsState(initial = false).value
 
-    // State to track the number of APs to display
+    // State to track the number of items to display
     val displayedAPsCount = remember { mutableStateOf(5) }
-
-    // Calculate if we're showing all APs
-    val isShowingAll = displayedAPsCount.value >= allScannedAPs.size
+    val displayedStationsCount = remember { mutableStateOf(5) } // Add this state for stations
 
     // Start and stop scanning based on monitor mode state
     DisposableEffect(isMonitorModeEnabled) {
@@ -451,7 +449,8 @@ fun HomeScreen(navController: NavController) {
                             Column(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                filteredStations.forEach { station ->
+                                // Only show limited number of stations initially
+                                filteredStations.take(displayedStationsCount.value).forEach { station ->
                                     val associatedAP = apMap[AP.normalizeMac(station.bssid)]
                                     StationCard(
                                         station = station,
@@ -459,6 +458,27 @@ fun HomeScreen(navController: NavController) {
                                         apChannel = associatedAP?.ch ?: 0,
                                         navController = navController
                                     )
+                                }
+                                
+                                // Add Show More/Less buttons for stations
+                                if (filteredStations.size > displayedStationsCount.value) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedStationsCount.value = filteredStations.size  // Show all
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show More")
+                                    }
+                                } else if (displayedStationsCount.value > 5 && filteredStations.size > 5) {
+                                    TextButton(
+                                        onClick = {
+                                            displayedStationsCount.value = 5  // Reset to initial count
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Text("Show Less")
+                                    }
                                 }
                             }
                         }
@@ -502,9 +522,9 @@ fun HomeScreen(navController: NavController) {
                                         },
                                         modifier = Modifier.align(Alignment.CenterHorizontally)
                                     ) {
-                                        Text("Show All")
+                                        Text("Show More")
                                     }
-                                } else if (displayedAPsCount.value > 5) {
+                                } else if (displayedAPsCount.value > 5 && allScannedAPs.size > 5) {
                                     TextButton(
                                         onClick = {
                                             displayedAPsCount.value = 5  // Reset to initial count

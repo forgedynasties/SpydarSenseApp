@@ -29,6 +29,10 @@ class SpyCamClassifier(private var context: Context? = null) {
     // Sequence length for input to the models
     private val sequenceLength = 30
     
+    // Window parameters for sliding window analysis
+    private val windowSizeSeconds = 3.0
+    private val strideSeconds = 1.0
+    
     // Input and output buffer sizes
     private val inputSize = sequenceLength * 4 // 4 bytes per float
     private val outputSize = 1 * 4 // 1 float output
@@ -262,26 +266,63 @@ class SpyCamClassifier(private var context: Context? = null) {
             val interpreterClass = Class.forName("org.tensorflow.lite.Interpreter")
             val runMethod = interpreterClass.getMethod("run", Any::class.java, Any::class.java)
             
-            // Prepare input data - normalize sequences to the right length and scale
-            val csiSequence = prepareSequence(features.map { it.csiFeature }, true)
-            val brSequence = prepareSequence(features.map { it.bitrateFeature.toFloat() }, false)
+            // Create windows of features for analysis
+            val windows = createSlidingWindows(features)
+            Log.d(TAG, "Created ${windows.size} sliding windows for analysis")
             
-            // Run inference on CSI model
-            val csiResult = safeRunInference(csiInterpreter!!, csiSequence, runMethod)
+            if (windows.isEmpty()) {
+                Log.d(TAG, "No valid windows could be created, falling back to threshold-based")
+                return analyzeWithThresholds(features)
+            }
             
-            // Run inference on Bitrate model
-            val brResult = safeRunInference(brInterpreter!!, brSequence, runMethod)
+            // Store predictions for each window
+            val windowPredictions = mutableListOf<Float>()
+            val windowTimestamps = mutableListOf<Double>()
             
-            Log.d(TAG, "TFLite inference results - CSI: $csiResult, BR: $brResult")
+            // Process each window
+            for (window in windows) {
+                // Prepare input data for this window
+                val csiSequence = prepareSequence(window.map { it.csiFeature }, true)
+                val brSequence = prepareSequence(window.map { it.bitrateFeature.toFloat() }, false)
+                
+                // Run inference on CSI model
+                val csiResult = safeRunInference(csiInterpreter!!, csiSequence, runMethod)
+                
+                // Run inference on Bitrate model
+                val brResult = safeRunInference(brInterpreter!!, brSequence, runMethod)
+                
+                // Calculate combined confidence score for this window
+                val combinedConfidence = (csiResult * 0.6f) + (brResult * 0.4f)
+                windowPredictions.add(combinedConfidence)
+                
+                // Store the timestamp of the end of this window for detection point
+                windowTimestamps.add(window.last().timestamp)
+            }
             
-            // Calculate combined confidence score
-            // Average of both models, weighted slightly toward CSI model (60/40 split)
-            val combinedConfidence = (csiResult * 0.6f) + (brResult * 0.4f)
+            Log.d(TAG, "Window predictions: $windowPredictions")
             
-            // Determine if it's a spy camera based on confidence threshold
-            val isSpyCam = combinedConfidence > 0.65f
+            // Calculate the final confidence as the maximum of window predictions
+            // This helps catch even brief spy camera activity
+            val finalConfidence = windowPredictions.maxOrNull() ?: 0f
             
-            // For visualization purposes, still detect change points with traditional method
+            // Calculate average confidence for more robust detection
+            val avgConfidence = if (windowPredictions.isNotEmpty()) 
+                windowPredictions.sum() / windowPredictions.size else 0f
+                
+            // Count high confidence windows (>0.65)
+            val highConfidenceCount = windowPredictions.count { it > 0.65f }
+            
+            // Final classification logic
+            val isSpyCam = finalConfidence > 0.65f || 
+                          (avgConfidence > 0.5f && highConfidenceCount >= 2)
+            
+            // Find indices of high confidence windows for detection points
+            val detectionPointIndices = windowPredictions.mapIndexedNotNull { index, confidence -> 
+                if (confidence > 0.65f) index else null 
+            }
+            val detectionPoints = detectionPointIndices.map { windowTimestamps[it] }
+            
+            // For visualization, still detect change points with traditional method
             val csiDeltas = calculateCsiDeltas(features)
             val bitrateDeltas = calculateBitrateDeltas(features)
             
@@ -291,33 +332,28 @@ class SpyCamClassifier(private var context: Context? = null) {
             val csiChangePoints = findChangePoints(features, csiDeltas, csiThreshold)
             val bitrateChangePoints = findChangePoints(features, bitrateDeltas, bitrateThreshold)
             
-            val correlatedChangePoints = findCorrelatedChangePoints(
-                csiChangePoints, 
-                bitrateChangePoints
-            )
-            
             // Generate appropriate message based on model confidence
             val message = when {
-                combinedConfidence > 0.85f -> 
-                    "High confidence spy camera detection: Neural network analysis indicates spy camera activity"
-                combinedConfidence > 0.75f -> 
-                    "Medium confidence spy camera detection: Neural network analysis suggests spy camera activity"
-                combinedConfidence > 0.65f -> 
-                    "Low confidence spy camera detection: Neural network analysis indicates possible spy camera"
-                combinedConfidence > 0.5f -> 
-                    "Inconclusive: Some spy camera characteristics detected but confidence is low"
+                highConfidenceCount >= 3 -> 
+                    "High confidence spy camera detection: Multiple time windows show spy camera activity"
+                highConfidenceCount >= 2 || finalConfidence > 0.8f -> 
+                    "Medium-high confidence spy camera detection: Several time windows indicate spy camera activity"
+                highConfidenceCount == 1 || finalConfidence > 0.65f -> 
+                    "Medium confidence spy camera detection: At least one time window shows strong spy camera indicators"
+                avgConfidence > 0.5f -> 
+                    "Low confidence spy camera detection: Weak indicators across multiple time windows"
                 else -> 
-                    "Not a spy camera: Neural network analysis shows normal device behavior"
+                    "Not a spy camera: No significant spy camera behavior detected in any time window"
             }
             
             return ClassificationResult(
                 isSpyCam = isSpyCam,
-                confidence = combinedConfidence,
-                detectionPoints = correlatedChangePoints.map { features[it.toInt()].timestamp },
+                confidence = finalConfidence,
+                detectionPoints = detectionPoints,
                 csiChangePoints = csiChangePoints.map { features[it.toInt()].timestamp },
                 bitrateChangePoints = bitrateChangePoints.map { features[it.toInt()].timestamp },
                 message = message,
-                modelUsed = "TFLite Neural Network"
+                modelUsed = "TFLite Neural Network (Sliding Window)"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error during TFLite inference: ${e.message}")
@@ -327,6 +363,48 @@ class SpyCamClassifier(private var context: Context? = null) {
             Log.d(TAG, "Falling back to threshold-based detection")
             return analyzeWithThresholds(features)
         }
+    }
+    
+    /**
+     * Create sliding windows of features for analysis
+     * Each window is 3 seconds of data, with a stride of 1 second
+     */
+    private fun createSlidingWindows(features: List<AlignedFeature>): List<List<AlignedFeature>> {
+        if (features.size < 3) return emptyList()
+        
+        val windows = mutableListOf<List<AlignedFeature>>()
+        
+        // Get the start and end timestamps
+        val startTime = features.first().timestamp
+        val endTime = features.last().timestamp
+        
+        // Make sure we have enough data
+        val totalDuration = endTime - startTime
+        if (totalDuration < windowSizeSeconds) {
+            // Just return a single window with all data if we don't have enough for sliding windows
+            return listOf(features)
+        }
+        
+        // Create windows with sliding approach
+        var windowStart = startTime
+        while (windowStart + windowSizeSeconds <= endTime) {
+            val windowEnd = windowStart + windowSizeSeconds
+            
+            // Find features within this window
+            val windowFeatures = features.filter { 
+                it.timestamp >= windowStart && it.timestamp <= windowEnd 
+            }
+            
+            // Only add window if it has enough data points
+            if (windowFeatures.size >= 3) {
+                windows.add(windowFeatures)
+            }
+            
+            // Slide the window by the stride amount
+            windowStart += strideSeconds
+        }
+        
+        return windows
     }
     
     /**

@@ -54,9 +54,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +75,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -225,6 +230,31 @@ fun HomeScreen(navController: NavController) {
             // Only include associated stations
             station.bssid != "(not associated)" && 
             apMap.containsKey(AP.normalizeMac(station.bssid))
+        }
+    }
+
+    // Add state for SSID filter
+    var selectedSsidFilter by remember { mutableStateOf<String?>(null) }
+    var showSsidDropdown by remember { mutableStateOf(false) }
+
+    // Create list of available SSIDs for filter
+    val availableSsids = remember(allScannedAPs) {
+        allScannedAPs.mapNotNull { it.essid }
+            .filter { it.isNotEmpty() && it != "null" }
+            .distinct()
+    }
+
+    // Apply SSID filter to stations
+    val displayedStations = remember(filteredStations, selectedSsidFilter, apMap) {
+        if (selectedSsidFilter == null) {
+            // No filter applied
+            filteredStations
+        } else {
+            // Filter stations by selected SSID
+            filteredStations.filter { station ->
+                val associatedAp = apMap[AP.normalizeMac(station.bssid)]
+                associatedAp?.essid == selectedSsidFilter
+            }
         }
     }
 
@@ -429,7 +459,81 @@ fun HomeScreen(navController: NavController) {
                         title = "Scanned Devices",
                         expanded = scannedDevicesExpanded.value && isMonitorModeEnabled,
                         onToggle = { if (isMonitorModeEnabled) scannedDevicesExpanded.value = !scannedDevicesExpanded.value },
-                        count = if (isMonitorModeEnabled) filteredStations.size else 0
+                        count = if (isMonitorModeEnabled) displayedStations.size else 0,
+                        extraContent = {
+                            // Add SSID filter dropdown button
+                            if (isMonitorModeEnabled && availableSsids.isNotEmpty()) {
+                                Box {
+                                    OutlinedButton(
+                                        onClick = { showSsidDropdown = true },
+                                        shape = RoundedCornerShape(4.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text(
+                                            text = selectedSsidFilter ?: "Filter by AP",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = "Filter",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    
+                                    DropdownMenu(
+                                        expanded = showSsidDropdown,
+                                        onDismissRequest = { showSsidDropdown = false },
+                                        modifier = Modifier.width(200.dp)
+                                    ) {
+                                        // Add option to clear filter
+                                        DropdownMenuItem(
+                                            text = { Text("Show All") },
+                                            onClick = {
+                                                selectedSsidFilter = null
+                                                showSsidDropdown = false
+                                            },
+                                            leadingIcon = {
+                                                if (selectedSsidFilter == null) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null
+                                                    )
+                                                }
+                                            }
+                                        )
+                                        
+                                        // Add SSID filter options
+                                        availableSsids.forEach { ssid ->
+                                            DropdownMenuItem(
+                                                text = { 
+                                                    Text(
+                                                        text = ssid,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    ) 
+                                                },
+                                                onClick = {
+                                                    selectedSsidFilter = ssid
+                                                    showSsidDropdown = false
+                                                },
+                                                leadingIcon = {
+                                                    if (selectedSsidFilter == ssid) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = null
+                                                        )
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     ) {
                         if (!isMonitorModeEnabled) {
                             Text(
@@ -438,9 +542,12 @@ fun HomeScreen(navController: NavController) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(vertical = 8.dp)
                             )
-                        } else if (filteredStations.isEmpty()) {
+                        } else if (displayedStations.isEmpty()) {
                             Text(
-                                text = "No devices detected",
+                                text = if (selectedSsidFilter != null) 
+                                    "No devices connected to \"$selectedSsidFilter\"" 
+                                else 
+                                    "No devices detected",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -450,7 +557,7 @@ fun HomeScreen(navController: NavController) {
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 // Only show limited number of stations initially
-                                filteredStations.take(displayedStationsCount.value).forEach { station ->
+                                displayedStations.take(displayedStationsCount.value).forEach { station ->
                                     val associatedAP = apMap[AP.normalizeMac(station.bssid)]
                                     StationCard(
                                         station = station,
@@ -461,16 +568,16 @@ fun HomeScreen(navController: NavController) {
                                 }
                                 
                                 // Add Show More/Less buttons for stations
-                                if (filteredStations.size > displayedStationsCount.value) {
+                                if (displayedStations.size > displayedStationsCount.value) {
                                     TextButton(
                                         onClick = {
-                                            displayedStationsCount.value = filteredStations.size  // Show all
+                                            displayedStationsCount.value = displayedStations.size  // Show all
                                         },
                                         modifier = Modifier.align(Alignment.CenterHorizontally)
                                     ) {
                                         Text("Show More")
                                     }
-                                } else if (displayedStationsCount.value > 5 && filteredStations.size > 5) {
+                                } else if (displayedStationsCount.value > 5 && displayedStations.size > 5) {
                                     TextButton(
                                         onClick = {
                                             displayedStationsCount.value = 5  // Reset to initial count
@@ -484,61 +591,7 @@ fun HomeScreen(navController: NavController) {
                         }
                     }
                 }
-                
-                // Access Points Section
-                item {
-                    ExpandableSection(
-                        title = "Access Points",
-                        expanded = accessPointsExpanded.value && isMonitorModeEnabled,
-                        onToggle = { if (isMonitorModeEnabled) accessPointsExpanded.value = !accessPointsExpanded.value },
-                        count = if (isMonitorModeEnabled) allScannedAPs.size else 0
-                    ) {
-                        if (!isMonitorModeEnabled) {
-                            Text(
-                                text = "Monitor mode is disabled. Enable it to scan for networks.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        } else if (allScannedAPs.isEmpty()) {
-                            Text(
-                                "No networks found",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        } else {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                allScannedAPs.take(displayedAPsCount.value).forEach { ap ->
-                                    APCard(ap, navController)
-                                }
-                                
-                                if (allScannedAPs.size > displayedAPsCount.value) {
-                                    TextButton(
-                                        onClick = {
-                                            displayedAPsCount.value = allScannedAPs.size  // Show all
-                                        },
-                                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                                    ) {
-                                        Text("Show More")
-                                    }
-                                } else if (displayedAPsCount.value > 5 && allScannedAPs.size > 5) {
-                                    TextButton(
-                                        onClick = {
-                                            displayedAPsCount.value = 5  // Reset to initial count
-                                        },
-                                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                                    ) {
-                                        Text("Show Less")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
+
                 // Add some padding at the bottom for better UX
                 item {
                     Spacer(modifier = Modifier.height(80.dp))

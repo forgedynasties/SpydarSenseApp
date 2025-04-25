@@ -51,7 +51,22 @@ class SpyCamClassifier(private var context: Context? = null) {
         val csiChangePoints: List<Double>,
         val bitrateChangePoints: List<Double>,
         val message: String,
-        val modelUsed: String = "N/A" // Indicates which model was used for classification
+        val modelUsed: String = "N/A", // Indicates which model was used for classification
+        val windowResults: List<WindowResult> = emptyList() // Added window-by-window results
+    )
+    
+    /**
+     * Data class representing an individual window classification result
+     */
+    data class WindowResult(
+        val startTime: Double,
+        val endTime: Double,
+        val csiConfidence: Float,
+        val bitrateConfidence: Float,
+        val combinedConfidence: Float,
+        val csiClass: Int,     // 1 if csiConfidence >= 0.5, else 0
+        val bitrateClass: Int, // 1 if bitrateConfidence >= 0.5, else 0
+        val windowClass: Int   // csiClass AND bitrateClass (1 only if both are 1)
     )
     
     init {
@@ -655,6 +670,157 @@ class SpyCamClassifier(private var context: Context? = null) {
         
         // Return sorted and distinct list
         return correlatedPoints.sorted().distinct().map { it.toDouble() }
+    }
+    
+    /**
+     * Analyze features with detailed window-by-window results
+     */
+    fun analyzeDetailed(features: List<AlignedFeature>): ClassificationResult {
+        if (features.size < 5) {
+            return ClassificationResult(
+                isSpyCam = false,
+                confidence = 0f,
+                detectionPoints = emptyList(),
+                csiChangePoints = emptyList(),
+                bitrateChangePoints = emptyList(),
+                message = "Insufficient data for analysis",
+                modelUsed = "N/A"
+            )
+        }
+        
+        Log.d(TAG, "Performing detailed analysis on ${features.size} features")
+        
+        // If TFLite models are loaded, try to use them for classification
+        if (tfliteAvailable && modelsLoaded && csiInterpreter != null && brInterpreter != null) {
+            try {
+                // Create windows of features for analysis
+                val windows = createSlidingWindows(features)
+                Log.d(TAG, "Created ${windows.size} sliding windows for detailed analysis")
+                
+                if (windows.isEmpty()) {
+                    Log.d(TAG, "No valid windows could be created, falling back to threshold-based")
+                    return analyzeWithThresholds(features)
+                }
+                
+                // Get interpreter class through reflection
+                val interpreterClass = Class.forName("org.tensorflow.lite.Interpreter")
+                val runMethod = interpreterClass.getMethod("run", Any::class.java, Any::class.java)
+                
+                // Process each window and store detailed results
+                val windowResults = mutableListOf<WindowResult>()
+                val windowPredictions = mutableListOf<Float>()
+                val windowTimestamps = mutableListOf<Double>()
+                
+                // Calculate window class counts for majority voting
+                var spyCameraWindowCount = 0
+                var normalWindowCount = 0
+                
+                for (window in windows) {
+                    // Get window start and end times
+                    val startTime = window.first().timestamp
+                    val endTime = window.last().timestamp
+                    
+                    // Prepare input data for this window
+                    val csiSequence = prepareSequence(window.map { it.csiFeature }, true)
+                    val brSequence = prepareSequence(window.map { it.bitrateFeature.toFloat() }, false)
+                    
+                    // Run inference on CSI model
+                    val csiResult = safeRunInference(csiInterpreter!!, csiSequence, runMethod)
+                    
+                    // Run inference on Bitrate model
+                    val brResult = safeRunInference(brInterpreter!!, brSequence, runMethod)
+                    
+                    // Create class values (0 or 1)
+                    val csiClass = if (csiResult >= 0.5f) 1 else 0
+                    val bitrateClass = if (brResult >= 0.5f) 1 else 0
+                    
+                    // Logical AND for the window class (both must be 1 for window to be classified as spy camera)
+                    val windowClass = if (csiClass == 1 && bitrateClass == 1) 1 else 0
+                    
+                    // Update window counts
+                    if (windowClass == 1) {
+                        spyCameraWindowCount++
+                    } else {
+                        normalWindowCount++
+                    }
+                    
+                    // Calculate combined confidence
+                    val combinedConfidence = (csiResult * 0.6f) + (brResult * 0.4f)
+                    windowPredictions.add(combinedConfidence)
+                    windowTimestamps.add(endTime)
+                    
+                    // Store detailed window result
+                    windowResults.add(
+                        WindowResult(
+                            startTime = startTime,
+                            endTime = endTime,
+                            csiConfidence = csiResult,
+                            bitrateConfidence = brResult,
+                            combinedConfidence = combinedConfidence,
+                            csiClass = csiClass,
+                            bitrateClass = bitrateClass,
+                            windowClass = windowClass
+                        )
+                    )
+                }
+                
+                // Calculate final confidence based on all windows
+                val finalConfidence = windowPredictions.maxOrNull() ?: 0f
+                
+                // Determine final classification by majority voting
+                val isSpyCam = spyCameraWindowCount > normalWindowCount
+                
+                // Find detection points from high confidence windows
+                val detectionPointIndices = windowPredictions.mapIndexedNotNull { index, confidence -> 
+                    if (confidence > 0.65f) index else null 
+                }
+                val detectionPoints = detectionPointIndices.map { windowTimestamps[it] }
+                
+                // For visualization, still detect change points with traditional method
+                val csiDeltas = calculateCsiDeltas(features)
+                val bitrateDeltas = calculateBitrateDeltas(features)
+                
+                val csiThreshold = determineCsiThreshold(csiDeltas)
+                val bitrateThreshold = determineBitrateThreshold(bitrateDeltas)
+                
+                val csiChangePoints = findChangePoints(features, csiDeltas, csiThreshold)
+                val bitrateChangePoints = findChangePoints(features, bitrateDeltas, bitrateThreshold)
+                
+                // Generate appropriate message based on window counts
+                val message = when {
+                    spyCameraWindowCount >= 3 -> 
+                        "High confidence spy camera detection: ${spyCameraWindowCount} of ${windows.size} windows show spy camera activity"
+                    spyCameraWindowCount >= 2 -> 
+                        "Medium confidence spy camera detection: ${spyCameraWindowCount} of ${windows.size} windows show spy camera activity"
+                    spyCameraWindowCount == 1 -> 
+                        "Low confidence spy camera detection: Only 1 of ${windows.size} windows shows spy camera activity"
+                    else -> 
+                        "Not a spy camera: 0 of ${windows.size} windows show spy camera activity"
+                }
+                
+                return ClassificationResult(
+                    isSpyCam = isSpyCam,
+                    confidence = finalConfidence,
+                    detectionPoints = detectionPoints,
+                    csiChangePoints = csiChangePoints.map { features[it.toInt()].timestamp },
+                    bitrateChangePoints = bitrateChangePoints.map { features[it.toInt()].timestamp },
+                    message = message,
+                    modelUsed = "TFLite Neural Network (Window-by-Window)",
+                    windowResults = windowResults
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during detailed TFLite inference: ${e.message}")
+                e.printStackTrace()
+                
+                // Fall back to threshold-based detection if TFLite fails
+                Log.d(TAG, "Falling back to threshold-based detection")
+                return analyzeWithThresholds(features)
+            }
+        } else {
+            // Use threshold-based detection if TFLite is not available
+            Log.d(TAG, "TFLite not available, using threshold-based detection")
+            return analyzeWithThresholds(features)
+        }
     }
     
     companion object {

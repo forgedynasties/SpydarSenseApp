@@ -167,6 +167,9 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
         )
     }
 
+    // Add state for window analysis
+    var isAnalyzing by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -519,6 +522,87 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                             
                             Spacer(modifier = Modifier.height(8.dp))
                             
+                            // Add Analyze button if data is captured but not yet analyzed
+                            if (captureCompleted && alignedFeatures.isNotEmpty() && classificationResult == null) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                
+                                Button(
+                                    onClick = {
+                                        isAnalyzing = true
+                                        // Use the detailed window analysis method for better results
+                                        coroutineScope.launch {
+                                            try {
+                                                val result = classifier.analyzeDetailed(alignedFeatures)
+                                                classificationResult = result
+                                                
+                                                // Show a toast notification with the result
+                                                // if there are windows with spy camera activity
+                                                if (result.windowResults.any { it.windowClass == 1 }) {
+                                                    showResultDialog = true
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e("DetectSpyCamScreen", "Analysis failed: ${e.message}")
+                                            } finally {
+                                                isAnalyzing = false
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isAnalyzing,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    )
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        if (isAnalyzing) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(
+                                            text = if (isAnalyzing) "Analyzing..." else "Analyze for Spy Camera",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                                
+                                Text(
+                                    text = "Run window-by-window analysis to detect spy camera behavior patterns",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                                )
+                            }
+
+                            // If analysis is in progress, show a small progress indicator
+                            if (isAnalyzing) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Analyzing data using window-by-window approach...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
 
                         } else {
                             EmptyDataIndicator(
@@ -556,57 +640,189 @@ fun DetectSpyCamScreen(sessionId: String, stationMac: String, apMac: String, pwr
                                 )
                             }
                         }
-                    }
-                }
-                
-                // Action buttons at the bottom
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    AppOutlinedButton(
-                        text = "Clear Data",
-                        onClick = { 
-                            detector.clearBuffers()
-                            classificationResult = null
-                            if (isCollecting) {
-                                isCollecting = false
-                            }
-                        }
-                    )
-                    
-                    if (captureCompleted && alignedFeatures.isNotEmpty()) {
-                        AppOutlinedButton(
-                            text = "Analyze Results",
-                            onClick = {
-                                // Use the classifier to analyze the aligned features
-                                coroutineScope.launch {
-                                    // Show loading first
-                                    showLoadingDialog = true
-                                    detector.updateProcessingStage("Analyzing patterns...")
-                                    detector.updateProcessingProgress(0.5f)
-                                    
-                                    // Small delay for UI feedback
-                                    delay(500)
-                                    
-                                    // Run the classifier (now with TFLite model if available)
-                                    val result = classifier.analyze(alignedFeatures)
-                                    classificationResult = result
-                                    
-                                    // Hide loading dialog
-                                    showLoadingDialog = false
-                                    
-                                    // Show result dialog
-                                    showResultDialog = true
+                        
+                        // Add Timeline Log section
+                        if (alignedFeatures.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            // Timeline and Sliding Windows logging
+                            var showTimelineLog by remember { mutableStateOf(false) }
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Feature Timeline Log",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                
+                                TextButton(
+                                    onClick = { showTimelineLog = !showTimelineLog }
+                                ) {
+                                    Text(if (showTimelineLog) "Hide Log" else "Show Log")
                                 }
                             }
-                        )
+                            
+                            if (showTimelineLog) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Format: Time (s) - CSI value - Bitrate (Mbps)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        
+                                        // Create scrollable log area with monospace font
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(200.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.surface,
+                                                    RoundedCornerShape(4.dp)
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                                    RoundedCornerShape(4.dp)
+                                                )
+                                                .padding(8.dp)
+                                        ) {
+                                            val logScrollState = rememberScrollState()
+                                            
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .verticalScroll(logScrollState)
+                                            ) {
+                                                alignedFeatures.forEach { feature ->
+                                                    Text(
+                                                        text = String.format("%.1f - CSI=%.2f - BR=%d", 
+                                                            feature.timestamp, 
+                                                            feature.csiFeature, 
+                                                            feature.bitrateFeature
+                                                        ),
+                                                        style = MaterialTheme.typography.bodySmall.copy(
+                                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                                        ),
+                                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                                                    )
+                                                }
+                                            }
+                                            
+                                            // Add a vertical scrollbar
+                                            CustomScrollbar(
+                                                modifier = Modifier.align(Alignment.CenterEnd),
+                                                scrollState = logScrollState
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                // Add Sliding Windows section if classification result is available
+                                if (classificationResult != null) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    
+                                    Text(
+                                        text = "Sliding Window Analysis",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "Detection points by time window:",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(100.dp)
+                                                    .background(
+                                                        MaterialTheme.colorScheme.surface,
+                                                        RoundedCornerShape(4.dp)
+                                                    )
+                                                    .border(
+                                                        1.dp,
+                                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                                        RoundedCornerShape(4.dp)
+                                                    )
+                                                    .padding(8.dp)
+                                            ) {
+                                                val windowLogScrollState = rememberScrollState()
+                                                
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .verticalScroll(windowLogScrollState)
+                                                ) {
+                                                    if (classificationResult!!.detectionPoints.isEmpty()) {
+                                                        Text(
+                                                            text = "No detection points in sliding windows",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                                        )
+                                                    } else {
+                                                        // Group detection points into 3-second windows
+                                                        val windowSize = 3.0
+                                                        val groupedPoints = classificationResult!!.detectionPoints
+                                                            .groupBy { (it / windowSize).toInt() * windowSize }
+                                                        
+                                                        groupedPoints.forEach { (windowStart, points) ->
+                                                            val windowEnd = windowStart + windowSize
+                                                            Text(
+                                                                text = String.format(
+                                                                    "Window [%.1f-%.1f]: %d detection points",
+                                                                    windowStart, 
+                                                                    windowEnd,
+                                                                    points.size
+                                                                ),
+                                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                                                ),
+                                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                
-                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -882,6 +1098,9 @@ fun BitrateTimelineChart(
         }
     }
 }
+
+
+
 
 // Add new chart composable for aligned features
 @Composable
@@ -1337,6 +1556,21 @@ fun ClassificationResultCard(
                     text = "Classification method: ${result.modelUsed}",
                     style = MaterialTheme.typography.bodySmall,
                     color = textColor.copy(alpha = 0.7f)
+                )
+            }
+
+            // Add window analysis summary after detection statistics
+            if (result.windowResults.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                val totalWindows = result.windowResults.size
+                val spyCamWindows = result.windowResults.count { it.windowClass == 1 }
+                
+                Text(
+                    text = "Window analysis: $spyCamWindows of $totalWindows windows classified as spy camera",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
                 )
             }
             

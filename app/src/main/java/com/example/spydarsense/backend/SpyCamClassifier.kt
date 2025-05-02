@@ -9,6 +9,7 @@ import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import kotlin.math.abs
+import kotlin.math.min
 
 /**
  * SpyCamClassifier analyzes CSI and bitrate data to detect if a device is likely a spy camera.
@@ -31,7 +32,7 @@ class SpyCamClassifier(private var context: Context? = null) {
     
     // Window parameters for sliding window analysis
     private val windowSizeSeconds = 3.0
-    private val strideSeconds = 1.0
+    private val strideSeconds = 0.5  // Changed from 1.0 to 0.1 for finer-grained analysis
     
     // Input and output buffer sizes
     private val inputSize = sequenceLength * 4 // 4 bytes per float
@@ -382,7 +383,7 @@ class SpyCamClassifier(private var context: Context? = null) {
     
     /**
      * Create sliding windows of features for analysis
-     * Each window is 3 seconds of data, with a stride of 1 second
+     * Each window is 3 seconds of data, with a stride of 0.1 second
      */
     private fun createSlidingWindows(features: List<AlignedFeature>): List<List<AlignedFeature>> {
         if (features.size < 3) return emptyList()
@@ -400,8 +401,12 @@ class SpyCamClassifier(private var context: Context? = null) {
             return listOf(features)
         }
         
+        Log.d(TAG, "Creating sliding windows - total duration: ${totalDuration}s, window size: ${windowSizeSeconds}s, stride: ${strideSeconds}s")
+        Log.d(TAG, "Expected number of windows: ${((totalDuration - windowSizeSeconds) / strideSeconds + 1).toInt()}")
+        
         // Create windows with sliding approach
         var windowStart = startTime
+        var windowCount = 0
         while (windowStart + windowSizeSeconds <= endTime) {
             val windowEnd = windowStart + windowSizeSeconds
             
@@ -413,14 +418,28 @@ class SpyCamClassifier(private var context: Context? = null) {
             // Only add window if it has enough data points
             if (windowFeatures.size >= 3) {
                 windows.add(windowFeatures)
+                windowCount++
+                Log.d(TAG, "Window #$windowCount: ${windowFeatures.size} features, start=${windowStart.format(2)}s, end=${windowEnd.format(2)}s")
+            } else {
+                Log.d(TAG, "SKIPPED Window at ${windowStart.format(2)}s-${windowEnd.format(2)}s: insufficient features (${windowFeatures.size})")
+            }
+            
+            // Check if there's enough time left for another stride
+            if (endTime - windowEnd < strideSeconds) {
+                Log.d(TAG, "Stopping window creation: time left (${(endTime - windowEnd).format(2)}s) is less than stride (${strideSeconds}s)")
+                break;
             }
             
             // Slide the window by the stride amount
             windowStart += strideSeconds
         }
         
+        Log.d(TAG, "Created ${windows.size} sliding windows with ${windowSizeSeconds}s size and ${strideSeconds}s stride")
         return windows
     }
+
+    // Helper extension function to format double with fixed decimal places
+    private fun Double.format(decimals: Int) = String.format("%.${decimals}f", this)
     
     /**
      * Safely run inference using reflection to avoid direct TFLite dependencies
@@ -477,12 +496,24 @@ class SpyCamClassifier(private var context: Context? = null) {
             // Scale the data differently based on whether it's CSI or Bitrate
             result[i] = if (isCsi) {
                 // CSI scaling - normalize to range suitable for the model
-                value / 100f  // assuming CSI values are typically 0-100
+                val scaledValue = value / 1000f  // assuming CSI values are typically 0-100
+                // Log scaling for debugging
+                if (i == 0 || i == usableLength-1) {
+                    Log.d(TAG, "CSI scaling: original=${value}, scaled=${scaledValue}")
+                }
+                scaledValue
             } else {
                 // Bitrate scaling - normalize to range suitable for the model
-                value / 1e4f  // assuming bitrate is in Kbps (1e3 to 1e7)
+                val scaledValue = value / 1e3f  // assuming bitrate is in Kbps (1e3 to 1e7)
+                // Log scaling for debugging
+                if (i == 0 || i == usableLength-1) {
+                    Log.d(TAG, "Bitrate scaling: original=${value}, scaled=${scaledValue}")
+                }
+                scaledValue
             }
         }
+        
+        Log.d(TAG, "Prepared sequence of length $usableLength (padded to $sequenceLength): ${result.take(min(5, usableLength))}...")
         
         return result
     }
@@ -715,7 +746,11 @@ class SpyCamClassifier(private var context: Context? = null) {
                 var spyCameraWindowCount = 0
                 var normalWindowCount = 0
                 
-                for (window in windows) {
+                // Add logging for window classifications
+                Log.d(TAG, "====== WINDOW-BY-WINDOW CLASSIFICATION RESULTS ======")
+                Log.d(TAG, "Window # | Start-End | CSI Class | BR Class | Window Class | CSI Conf | BR Conf | Combined")
+                
+                for ((windowIndex, window) in windows.withIndex()) {
                     // Get window start and end times
                     val startTime = window.first().timestamp
                     val endTime = window.last().timestamp
@@ -762,8 +797,27 @@ class SpyCamClassifier(private var context: Context? = null) {
                             windowClass = windowClass
                         )
                     )
+                    
+                    // Log detailed window classification results
+                    Log.d(TAG, String.format("%-8d | %5.1f-%5.1f | %-9d | %-7d | %-11d | %7.3f | %6.3f | %7.3f",
+                        windowIndex + 1,
+                        startTime,
+                        endTime,
+                        csiClass,
+                        bitrateClass,
+                        windowClass,
+                        csiResult,
+                        brResult,
+                        combinedConfidence
+                    ))
                 }
                 
+                // Log summary of window classifications
+                Log.d(TAG, "====== WINDOW CLASSIFICATION SUMMARY ======")
+                Log.d(TAG, "Total windows analyzed: ${windows.size}")
+                Log.d(TAG, "Spy camera windows: $spyCameraWindowCount")
+                Log.d(TAG, "Normal windows: $normalWindowCount")
+                Log.d(TAG, "Spy camera ratio: ${(spyCameraWindowCount.toFloat() / windows.size).toDouble().format(3)}")
                 // Calculate final confidence based on all windows
                 val finalConfidence = windowPredictions.maxOrNull() ?: 0f
                 
